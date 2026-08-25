@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.ttiimmaahh.omarivian",
+  "name": "OmaRivian",
+  "version": "0.1.0",
+  "author": "Tim Pearson",
+  "license": "MIT",
+  "description": "Read-only Rivian battery, charging, security, climate, location, and vehicle status in the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "OmaRivian",
+    "description": "Read-only status for your Rivian vehicle",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 900,
+      "showChargeInBar": false,
+      "locationEnabled": false,
+      "unit": ""
+    },
+    "schema": [
+      { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 300, "max": 3600, "step": 300, "defaultValue": 900 },
+      { "key": "showChargeInBar", "type": "boolean", "label": "Show charge percentage in bar", "defaultValue": false },
+      { "key": "locationEnabled", "type": "boolean", "label": "Expose current location to the panel", "description": "When disabled, coordinates are removed from the widget state file.", "defaultValue": false },
+      { "key": "unit", "type": "select", "label": "Units", "options": [{ "label": "Automatic", "value": "" }, { "label": "Imperial", "value": "imperial" }, { "label": "Metric", "value": "metric" }], "defaultValue": "" }
+    ]
+  }
+}

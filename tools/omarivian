@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+PLUGIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export PYTHONPATH="$PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m omarivian.cli "$@"

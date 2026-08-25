@@ -1,0 +1,14 @@
+[project]
+name = "omarivian"
+version = "0.1.0"
+description = "Read-only Rivian vehicle status for the Omarchy bar"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Tim Pearson" }]
+
+[project.scripts]
+omarivian = "omarivian.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
