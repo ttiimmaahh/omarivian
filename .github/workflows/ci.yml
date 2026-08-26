@@ -76,4 +76,4 @@ jobs:
         run: bash /tmp/omarchy/bin/omarchy-plugin-validate .
 
       - name: Lint QML
-        run: qmllint -I /tmp/omarchy/shell BarWidget.qml Panel.qml
+        run: /usr/lib/qt6/bin/qmllint -I /tmp/omarchy/shell BarWidget.qml Panel.qml
