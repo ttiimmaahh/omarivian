@@ -72,7 +72,13 @@ Configure the widget from Omarchy's bar settings, or set fields on its entry in 
 | `locationEnabled` | `false` | Include current coordinates in widget state and show the map action. |
 | `unit` | automatic | `imperial`, `metric`, or blank for automatic. |
 
-Location is sensitive. When disabled, coordinates are not requested and are removed from `~/.local/state/omarivian/state.json`. Enabling it sends coordinates to OpenStreetMap only when **Open in maps** is clicked.
+Location is sensitive and disabled by default, including after a clean installation. Enable it through Omarchy's bar settings, or run:
+
+```sh
+omarchy bar set io.github.ttiimmaahh.omarivian locationEnabled true --json
+```
+
+Press **Refresh** afterward to request the latest coordinates. When location is disabled, coordinates are not requested and are removed from `~/.local/state/omarivian/state.json`. When enabled, coordinates are sent to OpenStreetMap only if **Open in maps** is clicked. If the panel shows **Not reported**, Rivian did not provide a location during that refresh; a sleeping or offline vehicle may report it after reconnecting.
 
 ## Security and privacy
 
