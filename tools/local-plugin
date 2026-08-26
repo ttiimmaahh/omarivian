@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_ID="io.github.ttiimmaahh.omarivian"
+REPO_URL="${OMARIVIAN_REPO_URL:-https://github.com/ttiimmaahh/omarivian.git}"
+REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+PLUGINS_DIR="$HOME/.config/omarchy/plugins"
+PLUGIN_PATH="$PLUGINS_DIR/$PLUGIN_ID"
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") <command> [argument]
+
+  install         Replace the installed copy with a symlink to this checkout
+  uninstall       Disable and unlink this checkout
+  release [tag]   Replace the installed copy with the latest release, or tag
+  status          Show the currently installed source and version
+
+Examples:
+  ./tools/local-plugin install
+  ./tools/local-plugin uninstall
+  ./tools/local-plugin release
+  ./tools/local-plugin release v0.2.0
+
+Plugin switching preserves Secret Service credentials and cached vehicle state.
+Use OmaRivian's Unlink action separately for a clean account-onboarding test.
+EOF
+}
+
+fail() {
+  printf 'local-plugin: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+plugin_path_exists() {
+  [[ -e "$PLUGIN_PATH" || -L "$PLUGIN_PATH" ]]
+}
+
+local_link_installed() {
+  [[ -L "$PLUGIN_PATH" ]] && [[ "$(readlink -f -- "$PLUGIN_PATH")" == "$REPO_ROOT" ]]
+}
+
+refuse_foreign_symlink() {
+  if [[ -L "$PLUGIN_PATH" ]] && ! local_link_installed; then
+    fail "refusing to replace symlink $PLUGIN_PATH -> $(readlink -- "$PLUGIN_PATH")"
+  fi
+}
+
+remove_installed_copy() {
+  if plugin_path_exists; then
+    refuse_foreign_symlink
+    omarchy plugin remove "$PLUGIN_ID" --yes
+  fi
+}
+
+wait_for_discovery() {
+  local discovered=0
+  local attempt
+
+  require_command jq
+  for ((attempt = 0; attempt < 40; attempt++)); do
+    if omarchy plugin list --json | jq -e --arg id "$PLUGIN_ID" \
+      'any(.[]; .id == $id)' >/dev/null; then
+      discovered=1
+      break
+    fi
+    sleep 0.05
+  done
+  ((discovered)) || fail "plugin was not discovered after rescan"
+}
+
+rescan_and_enable() {
+  omarchy-shell shell rescanPlugins
+  wait_for_discovery
+  omarchy plugin enable "$PLUGIN_ID"
+}
+
+latest_release_tag() {
+  local tag
+  tag=$(
+    git ls-remote --tags --refs "$REPO_URL" 'refs/tags/v*' |
+      awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ {sub("refs/tags/", "", $2); print $2}' |
+      sort -V |
+      tail -n 1
+  )
+  [[ -n "$tag" ]] || fail "no release tags found at $REPO_URL"
+  printf '%s\n' "$tag"
+}
+
+install_local() {
+  require_command omarchy
+  require_command omarchy-shell
+  omarchy plugin validate "$REPO_ROOT"
+
+  if local_link_installed; then
+    printf 'Local checkout is already linked at %s\n' "$PLUGIN_PATH"
+  else
+    remove_installed_copy
+    mkdir -p -- "$PLUGINS_DIR"
+    ln -s -- "$REPO_ROOT" "$PLUGIN_PATH"
+    printf 'Linked %s -> %s\n' "$PLUGIN_PATH" "$REPO_ROOT"
+  fi
+
+  rescan_and_enable
+  printf 'Enabled local %s\n' "$PLUGIN_ID"
+}
+
+uninstall_local() {
+  require_command omarchy
+
+  if local_link_installed; then
+    omarchy plugin remove "$PLUGIN_ID" --yes
+    printf 'Local checkout uninstalled. Credentials and cache were preserved.\n'
+  elif plugin_path_exists; then
+    fail "installed plugin is not this local checkout; use the release command to replace it"
+  else
+    printf 'Local checkout is not installed.\n'
+  fi
+}
+
+install_release() {
+  local tag="${1:-}"
+
+  require_command git
+  require_command omarchy
+  require_command omarchy-shell
+  [[ -n "$tag" ]] || tag=$(latest_release_tag)
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || fail "invalid release tag: $tag"
+
+  remove_installed_copy
+  omarchy plugin add "$REPO_URL" --yes
+  git -C "$PLUGIN_PATH" checkout --detach "$tag"
+  omarchy plugin validate "$PLUGIN_PATH"
+  rescan_and_enable
+
+  printf 'Enabled released %s at %s (%s)\n' \
+    "$PLUGIN_ID" "$tag" "$(git -C "$PLUGIN_PATH" rev-parse --short HEAD)"
+}
+
+show_status() {
+  if local_link_installed; then
+    printf 'local: %s -> %s\n' "$PLUGIN_PATH" "$REPO_ROOT"
+  elif [[ -L "$PLUGIN_PATH" ]]; then
+    printf 'other symlink: %s -> %s\n' "$PLUGIN_PATH" "$(readlink -- "$PLUGIN_PATH")"
+  elif [[ -d "$PLUGIN_PATH/.git" ]]; then
+    printf 'released: %s\n' "$PLUGIN_PATH"
+    printf 'commit: %s\n' "$(git -C "$PLUGIN_PATH" rev-parse HEAD)"
+    printf 'tag: %s\n' "$(git -C "$PLUGIN_PATH" describe --tags --exact-match 2>/dev/null || printf 'not tag-pinned')"
+  elif plugin_path_exists; then
+    printf 'other installation: %s\n' "$PLUGIN_PATH"
+  else
+    printf 'not installed\n'
+  fi
+}
+
+case "${1:-}" in
+  install)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    install_local
+    ;;
+  uninstall)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    uninstall_local
+    ;;
+  release|install-release)
+    [[ $# -le 2 ]] || { usage >&2; exit 2; }
+    install_release "${2:-}"
+    ;;
+  status)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    show_status
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

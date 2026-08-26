@@ -157,12 +157,23 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 node tests/model.test.js
 ```
 
-For local shell testing, install from a Git repository or copy this checkout into `~/.config/omarchy/plugins/io.github.ttiimmaahh.omarivian`, then run:
+For local shell testing, use the checkout helper. It validates the plugin, replaces an installed release with a symlink to this Git checkout, waits for Omarchy discovery, and enables it so saved source changes hot-reload:
 
 ```sh
-omarchy-shell shell rescanPlugins
-omarchy-shell shell summon io.github.ttiimmaahh.omarivian '{}'
+./tools/local-plugin install
+./tools/local-plugin status
 ```
+
+Remove only the local symlink, or replace it with a clean clone pinned to the latest stable release tag:
+
+```sh
+./tools/local-plugin uninstall
+./tools/local-plugin release
+# Or validate a specific release:
+./tools/local-plugin release v0.2.0
+```
+
+Switching modes preserves Secret Service credentials and cached state. Use the panel's **Unlink** action separately only when intentionally testing clean account onboarding.
 
 ## Credits
 
