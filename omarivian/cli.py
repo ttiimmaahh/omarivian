@@ -6,6 +6,7 @@ import getpass
 import json
 import math
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +14,7 @@ from .api import ApiError, AuthenticationError, RivianReadClient, SchemaError, T
 from .store import (
     cached_artwork,
     clear_local_data,
+    command_lock,
     clear_tokens,
     load_tokens,
     read_preferences,
@@ -224,21 +226,34 @@ def command_link(_: argparse.Namespace) -> int:
         vehicles = client.vehicles()
         if not vehicles:
             raise ApiError("No vehicles are associated with this account")
-        save_tokens(client.tokens.to_json())
-        prefs = read_preferences()
-        if not prefs.get("selectedVehicleId"):
-            prefs["selectedVehicleId"] = str(vehicles[0].get("id") or "")
-            write_preferences(prefs)
-        print(f"\nLinked {len(vehicles)} vehicle{'s' if len(vehicles) != 1 else ''}. Refreshing status…")
-        return command_refresh(argparse.Namespace(location=prefs.get("locationEnabled", False), vehicle=None))
+        with command_lock():
+            save_tokens(client.tokens.to_json())
+            prefs = read_preferences()
+            if not prefs.get("selectedVehicleId"):
+                prefs["selectedVehicleId"] = str(vehicles[0].get("id") or "")
+                write_preferences(prefs)
+            print(f"\nLinked {len(vehicles)} vehicle{'s' if len(vehicles) != 1 else ''}. Refreshing status…")
+            return command_refresh(argparse.Namespace(location=None, location_generation=None, vehicle=None))
     except (ApiError, RuntimeError) as exc:
-        _write_error("unlinked", str(exc))
+        with command_lock():
+            _write_error("unlinked", str(exc))
         print(f"Link failed: {exc}", file=sys.stderr)
         return 1
 
 
 def command_refresh(args: argparse.Namespace) -> int:
     prefs = read_preferences()
+    generation = getattr(args, "location_generation", None)
+    if generation is not None:
+        try:
+            previous_generation = int(prefs.get("locationGeneration", 0) or 0)
+        except (TypeError, ValueError):
+            previous_generation = 0
+        if generation < previous_generation:
+            return 0
+        if generation == previous_generation and bool(args.location) and not bool(prefs.get("locationEnabled")):
+            return 0
+        prefs["locationGeneration"] = generation
     include_location = bool(prefs.get("locationEnabled", False)) if args.location is None else args.location
     prefs["locationEnabled"] = include_location
     if args.vehicle:
@@ -315,7 +330,7 @@ def command_refresh(args: argparse.Namespace) -> int:
 
 def command_select(args: argparse.Namespace) -> int:
     prefs = read_preferences(); prefs["selectedVehicleId"] = args.vehicle; write_preferences(prefs)
-    return command_refresh(argparse.Namespace(location=prefs.get("locationEnabled", False), vehicle=args.vehicle))
+    return command_refresh(argparse.Namespace(location=None, location_generation=None, vehicle=args.vehicle))
 
 
 def command_unlink(_: argparse.Namespace) -> int:
@@ -337,6 +352,7 @@ def parser() -> argparse.ArgumentParser:
     location = refresh.add_mutually_exclusive_group()
     location.add_argument("--location", action="store_true", dest="location", default=None, help="Include current coordinates in local state")
     location.add_argument("--no-location", action="store_false", dest="location", help="Remove coordinates from local state")
+    refresh.add_argument("--location-generation", type=int, help=argparse.SUPPRESS)
     refresh.add_argument("--vehicle")
     refresh.set_defaults(func=command_refresh)
     select = commands.add_parser("select", help="Select and refresh a vehicle")
@@ -349,7 +365,14 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
-    raise SystemExit(args.func(args))
+    if args.command == "status":
+        raise SystemExit(args.func(args))
+    if args.command == "link":
+        raise SystemExit(args.func(args))
+    if args.command == "refresh" and args.location is not None and args.location_generation is None:
+        args.location_generation = time.time_ns() // 1_000_000
+    with command_lock():
+        raise SystemExit(args.func(args))
 
 
 if __name__ == "__main__":

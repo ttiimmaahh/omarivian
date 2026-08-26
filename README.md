@@ -34,7 +34,7 @@ R2 telemetry is validated against the maintainer's vehicle. The legacy R1 path i
   <img src="docs/images/omarivian-bar.png" alt="OmaRivian bar icon showing a synthetic 64 percent charge" width="100">
 </p>
 
-The compact charge label is optional. Enable it through Omarchy's bar settings, or run:
+The compact charge label is optional. Enable it from the settings gear in the panel header, through Omarchy's bar settings, or run:
 
 ```sh
 omarchy bar set io.github.ttiimmaahh.omarivian showChargeInBar true --json
@@ -66,7 +66,7 @@ Install directly from GitHub:
 omarchy plugin add https://github.com/ttiimmaahh/omarivian.git --enable
 ```
 
-The widget defaults to the right side of the bar. Click its Rivian-inspired mark and choose **Link account**. OmaRivian opens a terminal for email, hidden password, and MFA input. The password and MFA code are never saved.
+The widget defaults to the right side of the bar. Click its Rivian-inspired mark, open the settings gear in the panel header, and choose **Link account**. OmaRivian opens a terminal for email, hidden password, and MFA input. The password and MFA code are never saved.
 
 To run linking manually from the plugin directory:
 
@@ -79,14 +79,14 @@ To run linking manually from the plugin directory:
 - **Left/right click:** open or close the panel
 - **Middle click:** refresh status
 - **R:** refresh while the panel is open
-- **Escape:** close the panel
+- **Escape:** return to vehicle details from settings, or close the panel from details
 - **Tab / Shift-Tab:** switch between adjacent Omarchy panels
 
 Use the in-panel vehicle pills to switch cars. The selected vehicle alone is refreshed, reducing calls to the unofficial API.
 
 ## Configuration
 
-Configure the widget from Omarchy's bar settings, or set fields on its entry in `~/.config/omarchy/shell.json`:
+The percentage and location options are available from the settings gear in the panel header. All options can also be configured from Omarchy's bar settings or set on the widget entry in `~/.config/omarchy/shell.json`:
 
 | Setting | Default | Description |
 | --- | ---: | --- |
@@ -95,13 +95,13 @@ Configure the widget from Omarchy's bar settings, or set fields on its entry in 
 | `locationEnabled` | `false` | Include current coordinates in widget state and show the map action. |
 | `unit` | automatic | `imperial`, `metric`, or blank for automatic. |
 
-Location is sensitive and disabled by default, including after a clean installation. Enable it through Omarchy's bar settings, or run:
+Location is sensitive and disabled by default, including after a clean installation. Enable it from the settings gear in the panel header, through Omarchy's bar settings, or run:
 
 ```sh
 omarchy bar set io.github.ttiimmaahh.omarivian locationEnabled true --json
 ```
 
-Press **Refresh** afterward to request the latest coordinates. When location is disabled, coordinates are not requested and are removed from `~/.local/state/omarivian/state.json`. When enabled, coordinates are sent to OpenStreetMap only if **Open in maps** is clicked. If the panel shows **Not reported**, Rivian did not provide a location during that refresh; a sleeping or offline vehicle may report it after reconnecting.
+Changing location from the panel automatically refreshes the vehicle. When location is disabled, coordinates are not requested and are removed from `~/.local/state/omarivian/state.json`. When enabled, coordinates are sent to OpenStreetMap only if **Open in maps** is clicked. If the panel shows **Not reported**, Rivian did not provide a location during that refresh; a sleeping or offline vehicle may report it after reconnecting.
 
 ## Security and privacy
 
@@ -121,7 +121,7 @@ OmaRivian does not collect analytics, operate a relay, or retain location histor
 
 ### Unlink and remove
 
-**Unlink** in the panel requires confirmation and deletes the saved keyring session. You can also run:
+**Unlink**, under the settings gear in the panel header, requires confirmation and deletes the saved keyring session. You can also run:
 
 ```sh
 ./tools/omarivian unlink

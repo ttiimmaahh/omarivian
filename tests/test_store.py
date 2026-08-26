@@ -66,6 +66,17 @@ class StoreTests(unittest.TestCase):
                     {"selectedVehicleId": "", "locationEnabled": False},
                 )
 
+    def test_command_lock_is_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory) / "state"
+            with mock.patch.object(store, "STATE_DIR", state_dir):
+                with store.command_lock():
+                    lock_path = state_dir / ".command.lock"
+                    self.assertTrue(lock_path.exists())
+                    self.assertEqual(stat.S_IMODE(lock_path.stat().st_mode), 0o600)
+                with store.command_lock():
+                    pass
+
     def test_oversized_keyring_stdout_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             secret_tool = Path(directory) / "secret-tool"

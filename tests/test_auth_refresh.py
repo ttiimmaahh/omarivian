@@ -49,6 +49,38 @@ class TokenRefreshTests(unittest.TestCase):
         self.assertEqual(client.tokens.app_session_token, "new-app-session")
         self.assertEqual(client.tokens.csrf_token, "new-csrf")
 
+    def test_stale_location_refresh_is_ignored(self):
+        with mock.patch.object(
+            cli,
+            "read_preferences",
+            return_value={"locationEnabled": False, "locationGeneration": 20},
+        ), mock.patch.object(cli, "write_preferences") as write_preferences, mock.patch.object(
+            cli, "_load_client"
+        ) as load_client:
+            result = cli.command_refresh(
+                argparse.Namespace(location=True, location_generation=10, vehicle=None)
+            )
+
+        self.assertEqual(result, 0)
+        write_preferences.assert_not_called()
+        load_client.assert_not_called()
+
+    def test_equal_generation_keeps_location_disabled(self):
+        with mock.patch.object(
+            cli,
+            "read_preferences",
+            return_value={"locationEnabled": False, "locationGeneration": 20},
+        ), mock.patch.object(cli, "write_preferences") as write_preferences, mock.patch.object(
+            cli, "_load_client"
+        ) as load_client:
+            result = cli.command_refresh(
+                argparse.Namespace(location=True, location_generation=20, vehicle=None)
+            )
+
+        self.assertEqual(result, 0)
+        write_preferences.assert_not_called()
+        load_client.assert_not_called()
+
     def test_command_refresh_persists_rotated_tokens_before_retry(self):
         events = []
 

@@ -1,7 +1,10 @@
 """Secret Service credentials and private local state."""
 from __future__ import annotations
+import fcntl
 import hashlib, json, os, shutil, subprocess, tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 SERVICE = "omarivian"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / SERVICE
@@ -10,6 +13,20 @@ PREFS_FILE = STATE_DIR / "preferences.json"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / SERVICE / "vehicle-artwork"
 MAX_LOCAL_JSON_BYTES = 1024 * 1024
 MAX_KEYRING_BYTES = 64 * 1024
+
+
+@contextmanager
+def command_lock() -> Iterator[None]:
+    """Serialize helper commands that mutate shared credentials or state."""
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock_path = STATE_DIR / ".command.lock"
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _secret_tool(*args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
