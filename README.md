@@ -1,5 +1,8 @@
 # OmaRivian
 
+[![CI](https://github.com/ttiimmaahh/omarivian/actions/workflows/ci.yml/badge.svg)](https://github.com/ttiimmaahh/omarivian/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/ttiimmaahh/omarivian)](https://github.com/ttiimmaahh/omarivian/releases)
+
 A read-only Rivian status widget for the Omarchy Quattro bar. Click the Rivian-inspired mark to see your vehicle's configured artwork, battery and range, charging, closures and locks, cabin climate, optional location, software, odometer, and last-contact information.
 
 > [!WARNING]
@@ -7,7 +10,7 @@ A read-only Rivian status widget for the Omarchy Quattro bar. Click the Rivian-i
 
 ## Project status
 
-OmaRivian is in early development and is not yet a production release. Expect continued testing and interface or API changes before its first verified marketplace submission.
+OmaRivian is an early-development `0.x` release. Expect continued testing and interface or API changes while marketplace verification and broader vehicle coverage progress.
 
 R2 telemetry is validated against the maintainer's vehicle. The legacy R1 path is intentionally retained, but the maintainer does not own an R1 and cannot fully validate it firsthand. R1 owners are especially welcome to test the widget and report model/year, missing fields, or regressions through GitHub issues.
 
@@ -111,6 +114,8 @@ The shell derives typography and layout density from the user's theme and displa
 - Use `Style.space(...)` or semantic `Style.spacing.*` tokens for dimensions, margins, padding, gaps, controls, and hairlines.
 - Use `Style.bar.*` for bar geometry and `fittedContentWidth` / `fittedContentHeight` for panels.
 - Avoid manual device-pixel-ratio scaling and raw visual pixel sizes; reserve unscaled numbers for ratios, opacity, timing, and source-image crop fractions.
+
+GitHub Actions runs the Python and JavaScript tests plus Omarchy manifest validation and QML linting on every pull request, push to `main`, and release tag.
 
 ```sh
 omarchy plugin validate .

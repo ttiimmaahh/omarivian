@@ -1,0 +1,106 @@
+name: Release
+
+# Tag-driven release. Push v<manifest-version>; CI runs first and the release is
+# created only when the tag matches both version declarations.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Publish GitHub release
+    needs: validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # required to create or update the matching GitHub release
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Verify tag and release metadata
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import tomllib
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if not tag.startswith("v"):
+              raise SystemExit(f"release tag must start with v: {tag}")
+
+          tag_version = tag[1:]
+          manifest_version = json.loads(
+              pathlib.Path("manifest.json").read_text(encoding="utf-8")
+          )["version"]
+          project_version = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+          )["project"]["version"]
+
+          print(
+              f"tag={tag_version} manifest.json={manifest_version} "
+              f"pyproject.toml={project_version}"
+          )
+          if tag_version != manifest_version or tag_version != project_version:
+              raise SystemExit("tag and project versions do not match")
+
+          notes = pathlib.Path("docs/releases") / f"{tag}.md"
+          if not notes.is_file() or not notes.read_text(encoding="utf-8").strip():
+              raise SystemExit(f"missing release notes: {notes}")
+          PY
+
+      - name: Verify remote tag still matches validated checkout
+        run: |
+          checkout_commit="$(git rev-parse HEAD)"
+          remote_commit="$(git ls-remote origin "refs/tags/${GITHUB_REF_NAME}^{}" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "$remote_commit" ]]; then
+            remote_commit="$(git ls-remote origin "refs/tags/${GITHUB_REF_NAME}" | awk 'NR == 1 { print $1 }')"
+          fi
+
+          echo "checkout=$checkout_commit remote-tag=$remote_commit"
+          if [[ -z "$remote_commit" || "$remote_commit" != "$checkout_commit" ]]; then
+            echo "::error::Remote tag no longer matches the commit that passed validation"
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          notes="docs/releases/${GITHUB_REF_NAME}.md"
+          prerelease=false
+          if [[ "$tag_version" == *-* ]]; then
+            prerelease=true
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "OmaRivian $GITHUB_REF_NAME" \
+              --notes-file "$notes" \
+              --prerelease="$prerelease"
+          else
+            args=(
+              "$GITHUB_REF_NAME"
+              --verify-tag
+              --title "OmaRivian $GITHUB_REF_NAME"
+              --notes-file "$notes"
+            )
+            if [[ "$prerelease" == true ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "${args[@]}"
+          fi
