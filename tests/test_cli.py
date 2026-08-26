@@ -81,7 +81,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state["closureLiftgateClosed"]["value"], "closed")
         self.assertEqual(
             requested,
-            [("vehicle-1", {"body.locks.states", "body.closures.states", "vehicle.power.state"})],
+            [("vehicle-1", {
+                "body.locks.states",
+                "body.closures.states",
+                "comfort.cabin.cabin_preconditioning_status",
+                "comfort.cabin.cabin_temperatures",
+                "comfort.cabin.hvac_settings_status",
+                "vehicle.power.state",
+            })],
         )
 
     def test_vehicle_state_keeps_complete_legacy_r1_state(self):
@@ -95,6 +102,10 @@ class CliTests(unittest.TestCase):
                 "doorRearLeftClosed": "closed", "doorRearRightClosed": "closed",
                 "closureFrunkClosed": "closed", "closureLiftgateClosed": "closed",
                 "powerState": "sleeping",
+                "cabinClimateInteriorTemperature": 20.0,
+                "cabinClimateDriverTemperature": 21.0,
+                "cabinPreconditioningStatus": "off",
+                "cabinPreconditioningType": "none",
             }.items()
         }
         client = RivianReadClient()
@@ -120,6 +131,10 @@ class CliTests(unittest.TestCase):
             )
         }
         complete_security["powerState"] = record("sleeping")
+        complete_security["cabinClimateInteriorTemperature"] = record(20.0)
+        complete_security["cabinClimateDriverTemperature"] = record(21.0)
+        complete_security["cabinPreconditioningStatus"] = record("off")
+        complete_security["cabinPreconditioningType"] = record("none")
         complete_security["gnssLocation"] = None
         client = RivianReadClient()
 
@@ -177,6 +192,49 @@ class CliTests(unittest.TestCase):
         }
         vehicle = normalize_vehicle({"id": "vehicle-1"}, state, False)
         self.assertEqual(vehicle["security"]["state"], "unlocked")
+
+    def test_driving_vehicle_does_not_show_stale_charging_state(self):
+        vehicle = normalize_vehicle(
+            {"id": "vehicle-1"},
+            {
+                "powerState": record("go", "2026-08-26T11:39:18Z"),
+                "chargerState": record("charging_ready", "2026-08-25T17:58:11Z"),
+                "timeToEndOfCharge": record(0, "2026-08-25T17:58:19Z"),
+            },
+            False,
+        )
+
+        self.assertEqual(vehicle["powerState"], "driving")
+        self.assertEqual(vehicle["charging"]["state"], "not_charging")
+        self.assertFalse(vehicle["charging"]["charging"])
+        self.assertFalse(vehicle["charging"]["pluggedIn"])
+        self.assertIsNone(vehicle["charging"]["minutesRemaining"])
+
+    def test_normalize_vehicle_includes_r2_climate_target(self):
+        vehicle = normalize_vehicle(
+            {"id": "vehicle-1"},
+            {
+                "cabinClimateInteriorTemperature": record(24.6),
+                "cabinClimateDriverTemperature": record(24.0),
+                "cabinPreconditioningStatus": record("active"),
+                "cabinPreconditioningType": record("heating"),
+            },
+            False,
+        )
+
+        self.assertEqual(vehicle["climate"]["cabinC"], 24.6)
+        self.assertEqual(vehicle["climate"]["targetC"], 24.0)
+        self.assertTrue(vehicle["climate"]["active"])
+        self.assertEqual(vehicle["climate"]["mode"], "heating")
+
+    def test_normalize_vehicle_keeps_unknown_climate_inactive(self):
+        vehicle = normalize_vehicle(
+            {"id": "vehicle-1"},
+            {"cabinPreconditioningStatus": record("unknown")},
+            False,
+        )
+
+        self.assertFalse(vehicle["climate"]["active"])
 
     def test_vehicle_artwork_prefers_large_dark_side_render(self):
         client = RivianReadClient()

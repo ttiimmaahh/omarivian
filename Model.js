@@ -51,7 +51,10 @@ function normalizeVehicle(raw) {
       openClosures: Array.isArray(s.openClosures)
         ? s.openClosures.filter((x) => text(x)) : []
     },
-    climate: { cabinC: num(cl.cabinC), active: flag(cl.active), mode: text(cl.mode) },
+    climate: {
+      cabinC: num(cl.cabinC), targetC: num(cl.targetC),
+      active: flag(cl.active), mode: text(cl.mode)
+    },
     location: normalizeLocation(loc, lat, lon),
     odometerKm: num(raw.odometerKm),
     softwareVersion: text(raw.softwareVersion),
@@ -232,7 +235,9 @@ function climateLabel(v, useImperial) {
   if (!v) return "—";
   var cabin = formatTemp(v.climate.cabinC, useImperial);
   if (!v.climate.active) return cabin;
-  return cabin + " · " + (titleCase(v.climate.mode) || "Conditioning");
+  var mode = titleCase(v.climate.mode) || "Conditioning";
+  var target = formatTemp(v.climate.targetC, useImperial);
+  return cabin + " · " + mode + (target === "—" ? "" : " to " + target);
 }
 
 function roundCoord(n, digits) {

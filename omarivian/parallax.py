@@ -29,6 +29,9 @@ MAX_PROTOBUF_FIELDS = 4096
 ALLOWED_TOPICS = frozenset({
     "body.closures.states",
     "body.locks.states",
+    "comfort.cabin.cabin_preconditioning_status",
+    "comfort.cabin.cabin_temperatures",
+    "comfort.cabin.hvac_settings_status",
     "dynamics.vehicle.gnss",
     "vehicle.power.state",
 })
@@ -121,8 +124,21 @@ def _timestamp(value: Any) -> str:
         return ""
 
 
-def _record(value: str, timestamp: Any) -> dict[str, Any]:
+def _record(value: Any, timestamp: Any) -> dict[str, Any]:
     return {"value": value, "timeStamp": _timestamp(timestamp)}
+
+
+def _decode_float_field(payload: str, field_number: int, timestamp: Any) -> dict[str, Any] | None:
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ParallaxError("Invalid Rivian Parallax payload") from exc
+    for number, wire_type, value in _protobuf_fields(raw):
+        if number == field_number and wire_type == 5:
+            decoded = struct.unpack("<f", value)[0]
+            if -100.0 <= decoded <= 100.0:
+                return _record(decoded, timestamp)
+    return None
 
 
 def _decode_states(payload: str, names: dict[int, str], values: dict[int, str], timestamp: Any) -> dict[str, Any]:
@@ -156,6 +172,27 @@ def decode_topic(topic: str, payload: str, timestamp: Any) -> dict[str, Any]:
         return _decode_states(payload, LOCK_MAP, {1: "locked", 2: "unlocked"}, timestamp)
     if topic == "body.closures.states":
         return _decode_states(payload, CLOSURE_MAP, {1: "open", 2: "closed"}, timestamp)
+    if topic == "comfort.cabin.cabin_temperatures":
+        # Observed R2 field 3 correlates with cabinClimateInteriorTemperature.
+        record = _decode_float_field(payload, 3, timestamp)
+        return {"cabinClimateInteriorTemperature": record} if record else {}
+    if topic == "comfort.cabin.hvac_settings_status":
+        # Observed R2 field 1 is the driver's HVAC target in Celsius.
+        record = _decode_float_field(payload, 1, timestamp)
+        return {"cabinClimateDriverTemperature": record} if record else {}
+    if topic == "comfort.cabin.cabin_preconditioning_status":
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ParallaxError("Invalid Rivian Parallax payload") from exc
+        for number, wire_type, value in _protobuf_fields(raw):
+            # Enum 8 was correlated against the live Rivian app's Heating state.
+            if number == 1 and wire_type == 0 and value == 8:
+                return {
+                    "cabinPreconditioningStatus": _record("active", timestamp),
+                    "cabinPreconditioningType": _record("heating", timestamp),
+                }
+        return {}
     if topic == "vehicle.power.state":
         try:
             raw = base64.b64decode(payload, validate=True)

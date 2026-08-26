@@ -8,20 +8,65 @@ STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
 STATE_FILE = STATE_DIR / "state.json"
 PREFS_FILE = STATE_DIR / "preferences.json"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / SERVICE / "vehicle-artwork"
+MAX_LOCAL_JSON_BYTES = 1024 * 1024
+MAX_KEYRING_BYTES = 64 * 1024
+
 
 def _secret_tool(*args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(["secret-tool", *args], input=input_text, text=True, capture_output=True, check=False)
+        return subprocess.run(
+            ["secret-tool", *args],
+            input=input_text,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
     except FileNotFoundError as exc:
         raise RuntimeError("secret-tool is required (package: libsecret)") from exc
+
+
+def _read_secret_tool(*args: str) -> tuple[int, str]:
+    try:
+        process = subprocess.Popen(
+            ["secret-tool", *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("secret-tool is required (package: libsecret)") from exc
+    if process.stdout is None:
+        process.kill()
+        process.wait()
+        raise RuntimeError("Could not read the system keyring")
+    try:
+        body = process.stdout.read(MAX_KEYRING_BYTES + 1)
+        if len(body) > MAX_KEYRING_BYTES:
+            process.kill()
+            process.wait()
+            raise RuntimeError("System keyring response was too large")
+        returncode = process.wait()
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        process.stdout.close()
+    try:
+        return returncode, body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("System keyring response was invalid") from exc
 
 def save_tokens(raw: str) -> None:
     result = _secret_tool("store", "--label=OmaRivian Rivian session", "application", SERVICE, "account", "default", input_text=raw)
     if result.returncode != 0: raise RuntimeError("Could not unlock or write the system keyring")
 
 def load_tokens() -> str | None:
-    result = _secret_tool("lookup", "application", SERVICE, "account", "default")
-    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+    returncode, stdout = _read_secret_tool("lookup", "application", SERVICE, "account", "default")
+    value = stdout.strip()
+    return value if returncode == 0 and value else None
 
 def clear_tokens() -> None:
     _secret_tool("clear", "application", SERVICE, "account", "default")
@@ -72,9 +117,20 @@ def write_artwork(vehicle_id: str, source_url: str, body: bytes, extension: str)
     return path
 
 
+def _read_json(path: Path, default: dict) -> dict:
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_LOCAL_JSON_BYTES + 1)
+        if len(raw) > MAX_LOCAL_JSON_BYTES:
+            return default
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else default
+    except (OSError, ValueError):
+        return default
+
+
 def read_preferences() -> dict:
-    try: return json.loads(PREFS_FILE.read_text())
-    except (OSError, ValueError): return {"selectedVehicleId": "", "locationEnabled": False}
+    return _read_json(PREFS_FILE, {"selectedVehicleId": "", "locationEnabled": False})
 
 def write_preferences(data: dict) -> None:
     _atomic_json(PREFS_FILE, data)
@@ -83,8 +139,7 @@ def write_state(data: dict) -> None:
     _atomic_json(STATE_FILE, data)
 
 def read_state() -> dict:
-    try: return json.loads(STATE_FILE.read_text())
-    except (OSError, ValueError): return {"schemaVersion": 1, "status": "unlinked", "vehicles": []}
+    return _read_json(STATE_FILE, {"schemaVersion": 1, "status": "unlinked", "vehicles": []})
 
 def _atomic_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

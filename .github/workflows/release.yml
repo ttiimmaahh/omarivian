@@ -36,6 +36,7 @@ jobs:
           import json
           import os
           import pathlib
+          import re
           import tomllib
 
           tag = os.environ["GITHUB_REF_NAME"]
@@ -49,12 +50,17 @@ jobs:
           project_version = tomllib.loads(
               pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
           )["project"]["version"]
+          package_source = pathlib.Path("omarivian/__init__.py").read_text(encoding="utf-8")
+          package_match = re.search(r'^__version__ = "([^"]+)"$', package_source, re.MULTILINE)
+          if package_match is None:
+              raise SystemExit("omarivian.__version__ is missing")
+          package_version = package_match.group(1)
 
           print(
               f"tag={tag_version} manifest.json={manifest_version} "
-              f"pyproject.toml={project_version}"
+              f"pyproject.toml={project_version} omarivian={package_version}"
           )
-          if tag_version != manifest_version or tag_version != project_version:
+          if len({tag_version, manifest_version, project_version, package_version}) != 1:
               raise SystemExit("tag and project versions do not match")
 
           notes = pathlib.Path("docs/releases") / f"{tag}.md"

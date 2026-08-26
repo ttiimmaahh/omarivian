@@ -1,5 +1,7 @@
 import json
+import os
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +46,39 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
                 self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
                 self.assertEqual(store.cached_artwork("vehicle-1", "https://cdn.example/car.png"), path)
+
+    def test_oversized_local_json_uses_safe_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            prefs_path = Path(directory) / "preferences.json"
+            oversized = json.dumps({"value": "x" * (1024 * 1024)}).encode()
+            state_path.write_bytes(oversized)
+            prefs_path.write_bytes(oversized)
+            with mock.patch.object(store, "STATE_FILE", state_path), mock.patch.object(
+                store, "PREFS_FILE", prefs_path
+            ):
+                self.assertEqual(
+                    store.read_state(),
+                    {"schemaVersion": 1, "status": "unlinked", "vehicles": []},
+                )
+                self.assertEqual(
+                    store.read_preferences(),
+                    {"selectedVehicleId": "", "locationEnabled": False},
+                )
+
+    def test_oversized_keyring_stdout_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            secret_tool = Path(directory) / "secret-tool"
+            secret_tool.write_text(
+                f"#!{sys.executable}\n"
+                "import sys\n"
+                "sys.stdout.buffer.write(b'x' * 65537)\n"
+            )
+            secret_tool.chmod(0o700)
+            path = directory + os.pathsep + os.environ.get("PATH", "")
+            with mock.patch.dict(os.environ, {"PATH": path}):
+                with self.assertRaisesRegex(RuntimeError, "too large"):
+                    store.load_tokens()
 
     def test_clear_tokens_uses_matching_secret_attributes(self):
         with mock.patch.object(store, "_secret_tool") as secret_tool:

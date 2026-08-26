@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.ttiimmaahh.omarivian",
   "name": "OmaRivian",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Tim Pearson",
   "license": "MIT",
   "description": "Read-only Rivian battery, charging, security, climate, location, and vehicle status in the Omarchy bar.",

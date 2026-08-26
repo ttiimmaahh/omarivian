@@ -19,6 +19,11 @@ assert.equal(M.barLabel(state, { showChargeInBar: true }, false), "");
 assert.equal(M.statusKind(M.parseState("not json")), "schema-error");
 assert.match(M.mapsUrl(state.vehicles[0]), /^https:\/\/www\.openstreetmap\.org\//);
 assert.equal(M.connectionLabel({ online: false, powerState: "sleeping" }), "Offline · Sleeping");
+assert.equal(M.connectionLabel({ online: true, powerState: "driving" }), "Online · Driving");
+assert.equal(
+  M.climateLabel({ climate: { cabinC: 24.6, targetC: 24.0, active: true, mode: "heating" } }, true),
+  "76°F · Heating to 75°F"
+);
 assert.equal(
   M.cachedStatusLabel(
     "ok",

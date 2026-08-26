@@ -1,0 +1,599 @@
+{
+  "info": {
+    "_postman_id": "bb34cf86-7a55-42fb-9d47-8e4145a0a444",
+    "name": "OmaRivian read-only owner API",
+    "description": "Unofficial, read-only requests used by OmaRivian. Rivian does not expose a documented OAuth 2.0 authorization/token service; this collection faithfully models its CSRF + app-session + login/MFA + refresh-token GraphQL flow. It contains no vehicle-control mutations and no secrets. Every request uses the literal Rivian gateway URL, disables redirect following, and is checked by a collection pre-request guard.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const expectedGateway = \"https://rivian.com/api/gql/gateway/graphql\";",
+          "const requestUrl = pm.request.url.toString();",
+          "if (requestUrl !== expectedGateway) { throw new Error(\"Refusing request to unexpected gateway: \" + requestUrl); }"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "description": "Run Create app session, then Login and optionally Login with OTP. For renewal, run Create app session then Refresh access token.",
+      "item": [
+        {
+          "name": "Create app session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"CreateCSRFToken\",\"query\":\"mutation CreateCSRFToken { createCsrfToken { csrfToken appSessionToken } }\",\"variables\":null}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "Run before login and before refreshing an expired session."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });",
+                  "const session = payload.data && payload.data.createCsrfToken;",
+                  "pm.test(\"Session tokens returned\", function () { pm.expect(session.csrfToken).to.be.a(\"string\").and.not.empty; pm.expect(session.appSessionToken).to.be.a(\"string\").and.not.empty; });",
+                  "pm.environment.set(\"csrfToken\", session.csrfToken);",
+                  "pm.environment.set(\"appSessionToken\", session.appSessionToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              },
+              {
+                "key": "A-Sess",
+                "value": "{{appSessionToken}}"
+              },
+              {
+                "key": "Csrf-Token",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"Login\",\"query\":\"mutation Login($email: String!, $password: String!) { login(email: $email, password: $password) { __typename ... on MobileLoginResponse { accessToken refreshToken userSessionToken } ... on MobileMFALoginResponse { otpToken } } }\",\"variables\":{\"email\":\"{{email}}\",\"password\":\"{{password}}\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "Run after Create app session. If MFA is required, the test script stores otpToken; then fill otpCode and run Login with OTP."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });",
+                  "const login = payload.data && payload.data.login;",
+                  "pm.test(\"Login response returned\", function () { pm.expect(login).to.be.an(\"object\"); });",
+                  "if (login.otpToken) { pm.environment.set(\"otpToken\", login.otpToken); }",
+                  "if (login.accessToken) { pm.environment.set(\"accessToken\", login.accessToken); pm.environment.set(\"refreshToken\", login.refreshToken); pm.environment.set(\"userSessionToken\", login.userSessionToken); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login with OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              },
+              {
+                "key": "A-Sess",
+                "value": "{{appSessionToken}}"
+              },
+              {
+                "key": "Csrf-Token",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"LoginWithOTP\",\"query\":\"mutation LoginWithOTP($email: String!, $otpCode: String!, $otpToken: String!) { loginWithOTP(email: $email, otpCode: $otpCode, otpToken: $otpToken) { accessToken refreshToken userSessionToken } }\",\"variables\":{\"email\":\"{{email}}\",\"otpCode\":\"{{otpCode}}\",\"otpToken\":\"{{otpToken}}\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "Fill the one-time otpCode after Login stores otpToken."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });",
+                  "const login = payload.data && payload.data.loginWithOTP;",
+                  "pm.test(\"Credential set returned\", function () { pm.expect(login.accessToken).to.be.a(\"string\").and.not.empty; pm.expect(login.refreshToken).to.be.a(\"string\").and.not.empty; pm.expect(login.userSessionToken).to.be.a(\"string\").and.not.empty; });",
+                  "pm.environment.set(\"accessToken\", login.accessToken);",
+                  "pm.environment.set(\"refreshToken\", login.refreshToken);",
+                  "pm.environment.set(\"userSessionToken\", login.userSessionToken);",
+                  "pm.environment.unset(\"otpCode\");",
+                  "pm.environment.unset(\"otpToken\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh access token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              },
+              {
+                "key": "A-Sess",
+                "value": "{{appSessionToken}}"
+              },
+              {
+                "key": "Csrf-Token",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"RefreshAccessToken\",\"query\":\"mutation RefreshAccessToken($refreshToken: String!) { refreshAccessToken(refreshToken: $refreshToken) { accessToken refreshToken } }\",\"variables\":{\"refreshToken\":\"{{refreshToken}}\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "Run Create app session first. Rivian rotates the refresh token; this script stores both replacements immediately. The refreshed access token is also used as U-Sess because this mutation does not return a separate userSessionToken."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });",
+                  "const refreshed = payload.data && payload.data.refreshAccessToken;",
+                  "pm.test(\"Rotated credentials returned\", function () { pm.expect(refreshed.accessToken).to.be.a(\"string\").and.not.empty; pm.expect(refreshed.refreshToken).to.be.a(\"string\").and.not.empty; });",
+                  "pm.environment.set(\"accessToken\", refreshed.accessToken);",
+                  "pm.environment.set(\"refreshToken\", refreshed.refreshToken);",
+                  "pm.environment.set(\"userSessionToken\", refreshed.accessToken);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Read-only plugin operations",
+      "item": [
+        {
+          "name": "List vehicles",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              },
+              {
+                "key": "A-Sess",
+                "value": "{{appSessionToken}}"
+              },
+              {
+                "key": "Csrf-Token",
+                "value": "{{csrfToken}}"
+              },
+              {
+                "key": "U-Sess",
+                "value": "{{userSessionToken}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"getUserInfo\",\"query\":\"query getUserInfo { currentUser { vehicles { id vin name vehicle { modelYear model } } } }\",\"variables\":null}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "Returns account vehicles. The test script selects the first vehicle only when vehicleId is blank. Responses contain VINs; do not export examples from a live account."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });",
+                  "const vehicles = payload.data && payload.data.currentUser && payload.data.currentUser.vehicles;",
+                  "pm.test(\"Vehicle list returned\", function () { pm.expect(vehicles).to.be.an(\"array\"); });",
+                  "if (!pm.environment.get(\"vehicleId\") && vehicles.length) { pm.environment.set(\"vehicleId\", vehicles[0].id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get legacy vehicle state",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              },
+              {
+                "key": "A-Sess",
+                "value": "{{appSessionToken}}"
+              },
+              {
+                "key": "Csrf-Token",
+                "value": "{{csrfToken}}"
+              },
+              {
+                "key": "U-Sess",
+                "value": "{{userSessionToken}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"GetVehicleState\",\"query\":\"query GetVehicleState($vehicleID: String!) { vehicleState(id: $vehicleID) { cloudConnection { lastSync isOnline } powerState { timeStamp value } batteryLevel { timeStamp value } batteryLimit { timeStamp value } distanceToEmpty { timeStamp value } chargerState { timeStamp value } chargerStatus { timeStamp value } chargePortState { timeStamp value } timeToEndOfCharge { timeStamp value } vehicleMileage { timeStamp value } otaCurrentVersion { timeStamp value } cabinClimateInteriorTemperature { timeStamp value } cabinClimateDriverTemperature { timeStamp value } cabinPreconditioningStatus { timeStamp value } cabinPreconditioningType { timeStamp value } doorFrontLeftClosed { timeStamp value } doorFrontRightClosed { timeStamp value } doorRearLeftClosed { timeStamp value } doorRearRightClosed { timeStamp value } doorFrontLeftLocked { timeStamp value } doorFrontRightLocked { timeStamp value } doorRearLeftLocked { timeStamp value } doorRearRightLocked { timeStamp value } closureFrunkClosed { timeStamp value } closureLiftgateClosed { timeStamp value } closureFrunkLocked { timeStamp value } closureLiftgateLocked { timeStamp value } closureTailgateClosed { timeStamp value } closureTonneauClosed { timeStamp value } } }\",\"variables\":{\"vehicleID\":\"{{vehicleId}}\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "The legacy R1-shaped snapshot. Some R2 fields are null and require the documented Parallax WebSocket topics described in postman/README.md."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get vehicle artwork",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              },
+              {
+                "key": "A-Sess",
+                "value": "{{appSessionToken}}"
+              },
+              {
+                "key": "Csrf-Token",
+                "value": "{{csrfToken}}"
+              },
+              {
+                "key": "U-Sess",
+                "value": "{{userSessionToken}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"getVehicleImages\",\"query\":\"query getVehicleImages($extension: String, $resolution: String, $versionForVehicle: String, $versionForPreOrder: String) { getVehicleOrderMobileImages(resolution: $resolution, extension: $extension, version: $versionForPreOrder) { ...image } getVehicleMobileImages(resolution: $resolution, extension: $extension, version: $versionForVehicle) { ...image } } fragment image on VehicleMobileImage { orderId vehicleId url extension resolution size design placement overlays { url overlay zIndex } }\",\"variables\":{\"extension\":null,\"resolution\":\"@3x\",\"versionForVehicle\":\"3\",\"versionForPreOrder\":\"3\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "Returns Rivian-controlled display artwork metadata. Responses may include order and vehicle identifiers."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Optional sensitive data",
+      "description": "Run only when location access is intentionally enabled.",
+      "item": [
+        {
+          "name": "Get vehicle location (sensitive)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "User-Agent",
+                "value": "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Apollographql-Client-Name",
+                "value": "com.rivian.ios.consumer-apollo-ios"
+              },
+              {
+                "key": "dc-cid",
+                "value": "m-ios-{{$guid}}"
+              },
+              {
+                "key": "A-Sess",
+                "value": "{{appSessionToken}}"
+              },
+              {
+                "key": "Csrf-Token",
+                "value": "{{csrfToken}}"
+              },
+              {
+                "key": "U-Sess",
+                "value": "{{userSessionToken}}"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"operationName\":\"GetVehicleLocation\",\"query\":\"query GetVehicleLocation($vehicleID: String!) { vehicleState(id: $vehicleID) { gnssLocation { timeStamp latitude longitude isAuthorized } } }\",\"variables\":{\"vehicleID\":\"{{vehicleId}}\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "https://rivian.com/api/gql/gateway/graphql",
+            "description": "SENSITIVE and optional. This may fail for R2, where location is supplied by Parallax. Do not save or share live responses."
+          },
+          "response": [],
+          "protocolProfileBehavior": {
+            "followRedirects": false
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+                  "const payload = pm.response.json();",
+                  "pm.test(\"No GraphQL errors\", function () { pm.expect(payload.errors || []).to.be.empty; });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -128,14 +128,23 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
         security = "unknown"
     open_closures = [name for name, closed in doors.items() if isinstance(closed, bool) and not closed]
 
+    raw_power_state = str(_record(state.get("powerState")) or "unknown")
+    driving = raw_power_state.strip().lower() == "go"
+    power_state = "driving" if driving else raw_power_state
     charger = str(_record(state.get("chargerState")) or _record(state.get("chargerStatus")) or "unknown")
     lower_charger = charger.lower()
     charging = "charging" in lower_charger and not any(word in lower_charger for word in ("not", "done", "complete"))
     plugged = charging or any(word in lower_charger for word in ("connected", "plugged", "ready", "complete"))
+    minutes_remaining = _number(_record(state.get("timeToEndOfCharge")))
+    if driving:
+        charger = "not_charging"
+        charging = False
+        plugged = False
+        minutes_remaining = None
     climate_raw = str(_record(state.get("cabinPreconditioningStatus")) or "")
     climate_active = _bool_state(climate_raw, {"on", "active", "running", "preconditioning"})
     if climate_active is None:
-        climate_active = bool(climate_raw and climate_raw.lower() not in {"off", "inactive", "none"})
+        climate_active = False
 
     location = None
     location_record = state.get("gnssLocation") or {}
@@ -156,7 +165,7 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
         "vinSuffix": str(summary.get("vin") or "")[-6:],
         "reportedAt": _latest_timestamp(state),
         "online": (state.get("cloudConnection") or {}).get("isOnline"),
-        "powerState": str(_record(state.get("powerState")) or "unknown"),
+        "powerState": power_state,
         "battery": {
             "percent": _number(_record(state.get("batteryLevel"))),
             "limitPercent": _number(_record(state.get("batteryLimit"))),
@@ -166,11 +175,12 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
             "state": charger,
             "charging": charging,
             "pluggedIn": plugged,
-            "minutesRemaining": _number(_record(state.get("timeToEndOfCharge"))),
+            "minutesRemaining": minutes_remaining,
         },
         "security": {"state": security, "openClosures": open_closures},
         "climate": {
             "cabinC": _number(_record(state.get("cabinClimateInteriorTemperature"))),
+            "targetC": _number(_record(state.get("cabinClimateDriverTemperature"))),
             "active": climate_active,
             "mode": str(_record(state.get("cabinPreconditioningType")) or ""),
         },
@@ -247,6 +257,9 @@ def command_refresh(args: argparse.Namespace) -> int:
             vehicles = client.vehicles()
         except AuthenticationError:
             client.refresh_session()
+            # Refresh tokens rotate. Persist the replacement before any later
+            # API work can fail, or the next poll may reuse an invalidated token.
+            save_tokens(client.tokens.to_json())
             vehicles = client.vehicles()
         selected = str(prefs.get("selectedVehicleId") or "")
         if not any(str(v.get("id")) == selected for v in vehicles):

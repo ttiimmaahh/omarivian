@@ -11,13 +11,25 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .parallax import ParallaxError, snapshot as parallax_snapshot
 
 GATEWAY = "https://rivian.com/api/gql/gateway/graphql"
 USER_AGENT = "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
 CLIENT_NAME = "com.rivian.ios.consumer-apollo-ios"
+MAX_GRAPHQL_RESPONSE_BYTES = 2 * 1024 * 1024
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
+
 
 class ApiError(RuntimeError): pass
 class AuthenticationError(ApiError): pass
@@ -28,6 +40,32 @@ def _is_rivian_https_url(value: str) -> bool:
     parsed = urlparse(value)
     hostname = (parsed.hostname or "").lower()
     return parsed.scheme == "https" and (hostname == "rivian.com" or hostname.endswith(".rivian.com"))
+
+
+def _origin(value: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(value)
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+
+
+def _read_capped(response: Any, max_bytes: int, description: str) -> bytes:
+    content_length = response.headers.get("Content-Length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise ApiError(f"{description} was too large")
+        except ValueError:
+            pass
+    chunks = []
+    total = 0
+    while total <= max_bytes:
+        chunk = response.read(min(_READ_CHUNK_BYTES, max_bytes + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    if total > max_bytes:
+        raise ApiError(f"{description} was too large")
+    return b"".join(chunks)
 
 
 @dataclass
@@ -72,14 +110,26 @@ class RivianReadClient:
             headers["Authorization"] = f"Bearer {self.tokens.access_token}"
         payload = json.dumps({"operationName": operation, "query": query, "variables": variables}).encode()
         try:
-            # GATEWAY is a module constant; no caller-controlled URL or scheme reaches urllib.
-            with urlopen(Request(GATEWAY, data=payload, headers=headers, method="POST"), timeout=self.timeout) as response:  # nosec B310
-                body = json.load(response)
+            # GATEWAY is fixed in production, redirects are rejected, and the final
+            # response origin is checked before any authenticated body is read.
+            request = Request(GATEWAY, data=payload, headers=headers, method="POST")
+            with _NO_REDIRECT_OPENER.open(request, timeout=self.timeout) as response:  # nosec B310
+                if _origin(response.geturl()) != _origin(GATEWAY):
+                    raise ApiError("Rivian response changed origin")
+                raw = _read_capped(response, MAX_GRAPHQL_RESPONSE_BYTES, "Rivian response")
         except HTTPError as exc:
-            if exc.code in (401, 403): raise AuthenticationError("Rivian sign-in expired") from exc
-            raise ApiError(f"Rivian returned HTTP {exc.code}") from exc
+            code = exc.code
+            exc.close()
+            if code in (401, 403): raise AuthenticationError("Rivian sign-in expired") from exc
+            raise ApiError(f"Rivian returned HTTP {code}") from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise ApiError("Could not reach Rivian") from exc
+        try:
+            body = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise SchemaError("Rivian response was not valid JSON") from exc
+        if not isinstance(body, dict):
+            raise SchemaError("Rivian response was not a JSON object")
         errors = body.get("errors") or []
         if errors:
             first = errors[0]
@@ -120,7 +170,27 @@ class RivianReadClient:
         if not self.tokens.access_token or not self.tokens.user_session_token: raise AuthenticationError("Rivian sign-in did not return a usable session")
 
     def refresh_session(self) -> None:
+        refresh_token = self.tokens.refresh_token
+        if not refresh_token:
+            raise AuthenticationError("Rivian sign-in cannot be renewed; relink the account")
         self.create_session()
+        query = "mutation RefreshAccessToken($refreshToken: String!) { refreshAccessToken(refreshToken: $refreshToken) { accessToken refreshToken } }"
+        payload = self._post(
+            "RefreshAccessToken",
+            query,
+            {"refreshToken": refresh_token},
+        ).get("refreshAccessToken") or {}
+        if not isinstance(payload, dict):
+            raise AuthenticationError("Rivian sign-in could not be renewed; relink the account")
+        access_token = str(payload.get("accessToken") or "")
+        rotated_refresh_token = str(payload.get("refreshToken") or "")
+        if not access_token or not rotated_refresh_token:
+            raise AuthenticationError("Rivian sign-in could not be renewed; relink the account")
+        self.tokens.access_token = access_token
+        self.tokens.refresh_token = rotated_refresh_token
+        # Rivian's refreshed access token becomes the U-Sess credential too;
+        # unlike login, this mutation does not return a separate userSessionToken.
+        self.tokens.user_session_token = access_token
 
     def vehicles(self) -> list[dict[str, Any]]:
         query = "query getUserInfo { currentUser { vehicles { id vin name vehicle { modelYear model } } } }"
@@ -166,11 +236,16 @@ class RivianReadClient:
         if not _is_rivian_https_url(source_url):
             raise ApiError("Rivian artwork URL was not secure")
         try:
-            with urlopen(Request(source_url, headers={"User-Agent": USER_AGENT}), timeout=self.timeout) as response:  # nosec B310
+            request = Request(source_url, headers={"User-Agent": USER_AGENT})
+            with _NO_REDIRECT_OPENER.open(request, timeout=self.timeout) as response:  # nosec B310
+                if not _is_rivian_https_url(response.geturl()):
+                    raise ApiError("Rivian artwork response changed origin")
                 content_type = response.headers.get_content_type()
-                body = response.read(max_bytes + 1)
+                body = _read_capped(response, max_bytes, "Rivian artwork response")
         except HTTPError as exc:
-            raise ApiError(f"Rivian artwork returned HTTP {exc.code}") from exc
+            code = exc.code
+            exc.close()
+            raise ApiError(f"Rivian artwork returned HTTP {code}") from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise ApiError("Could not download Rivian artwork") from exc
         if not content_type.startswith("image/") or len(body) > max_bytes:
@@ -203,6 +278,7 @@ class RivianReadClient:
             "chargerStatus { timeStamp value }", "chargePortState { timeStamp value }",
             "timeToEndOfCharge { timeStamp value }", "vehicleMileage { timeStamp value }",
             "otaCurrentVersion { timeStamp value }", "cabinClimateInteriorTemperature { timeStamp value }",
+            "cabinClimateDriverTemperature { timeStamp value }",
             "cabinPreconditioningStatus { timeStamp value }", "cabinPreconditioningType { timeStamp value }",
             "doorFrontLeftClosed { timeStamp value }", "doorFrontRightClosed { timeStamp value }",
             "doorRearLeftClosed { timeStamp value }", "doorRearRightClosed { timeStamp value }",
@@ -262,6 +338,12 @@ class RivianReadClient:
         power_value = power_record.get("value") if isinstance(power_record, dict) else None
         if not isinstance(power_value, str) or power_value.strip().lower() in {"", "unknown"}:
             topics.add("vehicle.power.state")
+        if not has_record("cabinClimateInteriorTemperature"):
+            topics.add("comfort.cabin.cabin_temperatures")
+        if not has_record("cabinClimateDriverTemperature"):
+            topics.add("comfort.cabin.hvac_settings_status")
+        if not has_record("cabinPreconditioningStatus") or not has_record("cabinPreconditioningType"):
+            topics.add("comfort.cabin.cabin_preconditioning_status")
         location = state.get("gnssLocation")
         if include_location and not (
             isinstance(location, dict)

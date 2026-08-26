@@ -110,10 +110,12 @@ The QML panel invokes a narrow local helper. That helper contains only:
 - Authentication operations required to establish a session
 - `getUserInfo` to enumerate vehicles
 - `GetVehicleState` to read an allowlisted set of legacy R1 status fields
-- A bounded, read-only `ParallaxMessages` snapshot for missing R2 lock, closure, power-state, and opt-in location fields
+- A bounded, read-only `ParallaxMessages` snapshot for missing R2 lock, closure, power-state, cabin-climate, and opt-in location fields
 - `getVehicleImages` to discover Rivian's configured, display-only vehicle render
 
-There is no generic query CLI and no vehicle command implementation. Session tokens are stored under the `omarivian` application label through Secret Service. The sanitized state cache is mode `0600` and contains vehicle status plus identity summaries; full VINs are never written. Vehicle artwork is downloaded only from Rivian-controlled HTTPS hosts into `~/.cache/omarivian/vehicle-artwork`, using mode `0700` directories and mode `0600` image files. QML loads the local file and never contacts Rivian directly. Unlinking removes that artwork cache.
+There is no generic query CLI and no vehicle command implementation. Session tokens are stored under the `omarivian` application label through Secret Service. When Rivian rejects an expired session, the next scheduled or manual refresh exchanges the stored refresh token, saves the rotated credentials immediately, and retries once; a separate background daemon is not required. Authenticated HTTP requests reject redirects and cross-origin responses, and network, keyring, state, and preference reads have strict byte limits.
+
+The sanitized state cache is mode `0600` and contains vehicle status plus identity summaries; full VINs are never written. Vehicle artwork is downloaded only from Rivian-controlled HTTPS hosts into `~/.cache/omarivian/vehicle-artwork`, using mode `0700` directories and mode `0600` image files. QML loads the local file and never contacts Rivian directly. Unlinking removes that artwork cache.
 
 OmaRivian does not collect analytics, operate a relay, or retain location history. Avoid posting state files or screenshots containing location information.
 
@@ -143,6 +145,8 @@ The shell derives typography and layout density from the user's theme and displa
 - Use `Style.space(...)` or semantic `Style.spacing.*` tokens for dimensions, margins, padding, gaps, controls, and hairlines.
 - Use `Style.bar.*` for bar geometry and `fittedContentWidth` / `fittedContentHeight` for panels.
 - Avoid manual device-pixel-ratio scaling and raw visual pixel sizes; reserve unscaled numbers for ratios, opacity, timing, and source-image crop fractions.
+
+An importable, secret-free Postman collection and example environment for the same read-only API surface are in [`postman/`](postman/README.md). Rivian's private owner API uses its own GraphQL session/token flow rather than a documented OAuth 2.0 service.
 
 GitHub Actions runs the Python and JavaScript tests plus Omarchy manifest validation and QML linting on every pull request, push to `main`, and release tag.
 

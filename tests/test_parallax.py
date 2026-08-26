@@ -105,6 +105,29 @@ class ParallaxTests(unittest.TestCase):
         )
         self.assertEqual(power["powerState"]["value"], "sleeping")
 
+    def test_r2_climate_topics_decode_cabin_target_and_heating(self):
+        timestamp = 1_787_745_230_028
+        cabin = decode_topic(
+            "comfort.cabin.cabin_temperatures",
+            base64.b64encode(b"\x1d" + struct.pack("<f", 24.6)).decode(),
+            timestamp,
+        )
+        target = decode_topic(
+            "comfort.cabin.hvac_settings_status",
+            base64.b64encode(b"\x0d" + struct.pack("<f", 24.0)).decode(),
+            timestamp,
+        )
+        heating = decode_topic(
+            "comfort.cabin.cabin_preconditioning_status",
+            base64.b64encode(b"\x08\x08").decode(),
+            timestamp,
+        )
+
+        self.assertAlmostEqual(cabin["cabinClimateInteriorTemperature"]["value"], 24.6, places=4)
+        self.assertEqual(target["cabinClimateDriverTemperature"]["value"], 24.0)
+        self.assertEqual(heating["cabinPreconditioningStatus"]["value"], "active")
+        self.assertEqual(heating["cabinPreconditioningType"]["value"], "heating")
+
     def test_snapshot_subscribes_only_to_requested_non_location_topics(self):
         messages = [
             {"type": "connection_ack"},

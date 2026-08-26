@@ -8,10 +8,10 @@ This document separates confirmed requirements from project recommendations. Mar
 
 - Public repository: <https://github.com/ttiimmaahh/omarivian>
 - Default branch: `main`
-- Telemetry and UI baseline: [`2518fa6390f1c27fa00bff947dec3a9740471a21`](https://github.com/ttiimmaahh/omarivian/commit/2518fa6390f1c27fa00bff947dec3a9740471a21)
-- `manifest.json` version: `0.1.0`
-- `pyproject.toml` version: `0.1.0`
-- Existing tags/releases: none
+- Latest published baseline before this release: [`28bc902a77c5e978e7a986830cdfc3041c4da287`](https://github.com/ttiimmaahh/omarivian/commit/28bc902a77c5e978e7a986830cdfc3041c4da287)
+- `manifest.json` version: `0.2.0`
+- `pyproject.toml` version: `0.2.0`
+- Existing tags/releases: `v0.1.0`
 - License: MIT
 - Marketplace plugin ID: `io.github.ttiimmaahh.omarivian`
 
@@ -45,17 +45,17 @@ Omarchy does **not** install from GitHub release assets. It clones the repositor
 
 Neither GitHub nor the marketplace requires a `v` prefix. **Project recommendation:** establish `v<manifest-version>` as the repository convention, starting with `v0.1.0`.
 
-## First release recommendation
+## Release process
 
-Publish `v0.1.0` as the project's first standard GitHub release. The `0.x` version and README both identify it as early-development software, while the release notes preserve the unsupported private-API and R1-validation limitations.
+The `0.x` version and README identify OmaRivian as early-development software, while each release note preserves the unsupported private-API and vehicle-validation limitations.
 
-The repository's tag-driven release workflow reruns every hosted validation job, verifies that the tag matches both version declarations, requires matching release notes, and creates the GitHub release only after those checks pass.
+The repository's tag-driven release workflow reruns every hosted validation job, verifies that the tag matches all version declarations, requires matching release notes, and creates the GitHub release only after those checks pass.
 
 After the final release commit is pushed and its branch CI succeeds:
 
 ```sh
-git tag -a v0.1.0 -m "OmaRivian v0.1.0"
-git push origin v0.1.0
+git tag -a v0.2.0 -m "OmaRivian v0.2.0"
+git push origin v0.2.0
 ```
 
 The tag push triggers `.github/workflows/release.yml`; do not create the release manually in parallel.
@@ -148,12 +148,12 @@ Retain the existing non-affiliation disclaimer, do not imply Rivian sponsorship 
 
 ### Repository and version
 
-- [x] Publish `v0.1.0` as a standard early-development GitHub release.
+- [ ] Publish `v0.2.0` as a standard early-development GitHub release.
 - [x] Accept the owner decision to ship the existing Rivian mark and non-affiliation disclaimer.
 - [ ] Add a sanitized `preview.png`, or consciously accept marketplace fallback imagery.
 - [x] Keep `manifest.json` and `pyproject.toml` versions identical.
 - [x] Ensure README status and release status do not contradict each other.
-- [x] Draft `docs/releases/v0.1.0.md`.
+- [x] Draft `docs/releases/v0.2.0.md`.
 - [ ] Ensure `main` contains only intended release content and is pushed.
 
 ### Validation
@@ -175,7 +175,7 @@ git status --short
 
 ### GitHub release
 
-- [ ] Push tag `v0.1.0` at the final release commit.
+- [ ] Push tag `v0.2.0` at the final release commit.
 - [ ] Verify the tag-triggered validation workflow succeeds.
 - [ ] Verify generated source archives contain `manifest.json` at the archive root directory.
 - [ ] Verify the published release page and notes.
