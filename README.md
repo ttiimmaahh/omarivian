@@ -16,7 +16,8 @@ R2 telemetry is validated against the maintainer's vehicle. The legacy R1 path i
 
 ## Highlights
 
-- Compact, theme-native bar panel inspired by mobile vehicle widgets
+- Compact bar panel inspired by mobile vehicle widgets
+- Automatically inherits the user's active Omarchy colors, typography, spacing, and display scaling
 - Rivian-provided artwork matching the vehicle model, paint, wheels, and configuration
 - Multiple-vehicle switcher
 - Honest stale and offline states with last-known data
@@ -24,6 +25,28 @@ R2 telemetry is validated against the maintainer's vehicle. The legacy R1 path i
 - Password and one-time code entered in a terminal, never in QML or process arguments
 - Tokens stored in Linux Secret Service, not `shell.json` or plaintext files
 - Location disabled by default and omitted entirely from the local state file
+
+## Screenshots
+
+### Bar widget
+
+<p align="center">
+  <img src="docs/images/omarivian-bar.png" alt="OmaRivian bar icon showing a synthetic 64 percent charge" width="100">
+</p>
+
+The compact charge label is optional. Enable it through Omarchy's bar settings, or run:
+
+```sh
+omarchy bar set io.github.ttiimmaahh.omarivian showChargeInBar true --json
+```
+
+### Vehicle panel
+
+<p align="center">
+  <img src="preview.png" alt="OmaRivian vehicle panel populated with synthetic demo telemetry" width="420">
+</p>
+
+All visible identity, location, and telemetry values in these screenshots are synthetic demo data.
 
 ## Requirements
 
