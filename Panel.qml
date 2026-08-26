@@ -30,6 +30,7 @@ Panel {
   property string page: "details"
   property bool settingsReady: false
   property string queuedLocationArg: ""
+  property string pluginVersion: ""
   property double nowMs: Date.now()
 
   readonly property string pluginDir: {
@@ -158,6 +159,14 @@ Panel {
     }
     return found;
   }
+  function applyManifestText(body) {
+    try {
+      const parsed = JSON.parse(body);
+      panel.pluginVersion = (parsed && typeof parsed.version === "string") ? parsed.version.trim() : "";
+    } catch (error) {
+      panel.pluginVersion = "";
+    }
+  }
 
   Component.onCompleted: panel.settingsReady = true
 
@@ -175,6 +184,12 @@ Panel {
       return;
     panel.nowMs = Date.now();
     panel.refresh();
+  }
+
+  FileView {
+    path: panel.pluginDir + "manifest.json"
+    onLoaded: panel.applyManifestText(text())
+    onLoadFailed: panel.pluginVersion = ""
   }
 
   FileView {
@@ -258,6 +273,7 @@ Panel {
 
       anchors.centerIn: parent
       text: chip.label
+      textFormat: Text.PlainText
       font.family: Style.font.family
       font.pixelSize: chip.iconOnly ? Style.font.iconLarge : Style.font.bodySmall
       color: chip.active ? Color.background : (chip.danger ? Color.urgent : Color.foreground)
@@ -303,6 +319,7 @@ Panel {
       Text {
         width: factText.width
         text: fact.label
+        textFormat: Text.PlainText
         font.pixelSize: Style.font.bodySmall
         color: panel.mutedForeground
         elide: Text.ElideRight
@@ -311,6 +328,7 @@ Panel {
       Text {
         width: factText.width
         text: fact.value
+        textFormat: Text.PlainText
         font.pixelSize: Style.font.body
         color: Color.foreground
         elide: Text.ElideRight
@@ -343,6 +361,7 @@ Panel {
 
       anchors.left: parent.left
       text: detail.label
+      textFormat: Text.PlainText
       font.pixelSize: Style.font.bodySmall
       color: panel.mutedForeground
     }
@@ -355,6 +374,7 @@ Panel {
       anchors.leftMargin: Style.space(12)
       horizontalAlignment: Text.AlignRight
       text: detail.value
+      textFormat: Text.PlainText
       font.pixelSize: Style.font.bodySmall
       color: Color.foreground
       elide: Text.ElideRight
@@ -439,6 +459,7 @@ Panel {
               Text {
                 width: headerText.width
                 text: panel.hasData ? Model.vehicleTitle(panel.vehicle) : "OmaRivian"
+                textFormat: Text.PlainText
                 font.pixelSize: Style.font.title
                 font.weight: Font.Medium
                 color: Color.foreground
@@ -448,6 +469,7 @@ Panel {
               Text {
                 width: headerText.width
                 text: panel.hasData ? [Model.vehicleSubtitle(panel.vehicle), Model.connectionLabel(panel.vehicle)].filter(p => p).join(" · ") : "Rivian vehicle status"
+                textFormat: Text.PlainText
                 font.pixelSize: Style.font.bodySmall
                 color: panel.mutedForeground
                 elide: Text.ElideRight
@@ -457,6 +479,7 @@ Panel {
                 width: headerText.width
                 visible: panel.hasData && (panel.kind !== "ok" || panel.stale || panel.helperError !== "")
                 text: Model.cachedStatusLabel(panel.kind, panel.stateData, panel.vehicle, panel.helperError, panel.nowMs)
+                textFormat: Text.PlainText
                 font.pixelSize: Style.font.bodySmall
                 color: (panel.kind === "auth-expired" || panel.kind === "schema-error" || panel.helperError !== "") ? Color.urgent : panel.mutedForeground
                 elide: Text.ElideRight
@@ -517,6 +540,7 @@ Panel {
               Text {
                 width: bannerCol.width
                 text: panel.helperError !== "" ? "Helper failed" : Model.statusBanner(panel.kind, panel.stateData).title
+                textFormat: Text.PlainText
                 font.pixelSize: Style.font.body
                 font.weight: Font.Medium
                 color: Color.foreground
@@ -527,6 +551,7 @@ Panel {
               Text {
                 width: bannerCol.width
                 text: panel.helperError !== "" ? panel.helperError : Model.statusBanner(panel.kind, panel.stateData).detail
+                textFormat: Text.PlainText
                 font.pixelSize: Style.font.bodySmall
                 color: panel.mutedForeground
                 wrapMode: Text.WordWrap
@@ -612,6 +637,7 @@ Panel {
                 anchors.left: parent.left
                 anchors.baseline: rangeText.baseline
                 text: Model.formatPercent(panel.hasData ? panel.vehicle.battery.percent : null)
+                textFormat: Text.PlainText
                 font.pixelSize: Style.font.display
                 font.weight: Font.DemiBold
                 color: Color.accent
@@ -623,6 +649,7 @@ Panel {
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 text: Model.formatDistance(panel.hasData ? panel.vehicle.battery.rangeKm : null, panel.useImperial)
+                textFormat: Text.PlainText
                 font.pixelSize: Style.font.title
                 color: Color.foreground
               }
@@ -660,6 +687,7 @@ Panel {
                 const limit = panel.vehicle.battery.limitPercent;
                 return [limit === null ? "" : "Limit " + Model.formatPercent(limit), Model.chargingLabel(panel.vehicle)].filter(p => p).join(" · ");
               }
+              textFormat: Text.PlainText
               font.pixelSize: Style.font.bodySmall
               color: panel.mutedForeground
               elide: Text.ElideRight
@@ -729,6 +757,7 @@ Panel {
             width: content.width
             visible: !panel.hasData
             text: panel.kind === "unlinked" ? "Link your Rivian account to see battery, charging, security, climate, and location at a glance. OmaRivian is read-only and never sends commands to the vehicle." : "No vehicle data to show yet."
+            textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             font.pixelSize: Style.font.body
             color: panel.mutedForeground
@@ -779,6 +808,7 @@ Panel {
               anchors.rightMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               text: "OmaRivian Settings"
+              textFormat: Text.PlainText
               font.pixelSize: Style.font.title
               font.weight: Font.Medium
               color: Color.foreground
@@ -808,6 +838,7 @@ Panel {
 
             Text {
               text: "Appearance"
+              textFormat: Text.PlainText
               font.pixelSize: Style.font.bodySmall
               font.weight: Font.Medium
               color: panel.mutedForeground
@@ -836,6 +867,7 @@ Panel {
 
             Text {
               text: "Privacy"
+              textFormat: Text.PlainText
               font.pixelSize: Style.font.bodySmall
               font.weight: Font.Medium
               color: panel.mutedForeground
@@ -869,6 +901,7 @@ Panel {
 
             Text {
               text: "Account"
+              textFormat: Text.PlainText
               font.pixelSize: Style.font.bodySmall
               font.weight: Font.Medium
               color: panel.mutedForeground
@@ -915,6 +948,16 @@ Panel {
                 }
               }
             }
+          }
+
+          Text {
+            width: settingsContent.width
+            visible: panel.pluginVersion !== ""
+            text: visible ? "OmaRivian v" + panel.pluginVersion : ""
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignHCenter
+            font.pixelSize: Style.font.caption
+            color: panel.mutedForeground
           }
 
           // Bottom padding so the fitted content height leaves a margin.

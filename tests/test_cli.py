@@ -1,10 +1,14 @@
 import json
 import math
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
+from unittest import mock
 
-from omarivian.api import ApiError, AuthenticationError, RivianReadClient, Tokens
-from omarivian.cli import normalize_vehicle
+import omarivian.store as store
+from omarivian.api import MAX_VEHICLES, ApiError, AuthenticationError, RivianReadClient, Tokens
+from omarivian.cli import MAX_TEXT_CHARS, normalize_vehicle
 
 
 def record(value, timestamp="2026-08-25T12:00:00Z"):
@@ -45,6 +49,74 @@ class CliTests(unittest.TestCase):
         self.assertTrue(math.isclose(vehicle["odometerKm"], 160.934))
         self.assertEqual(vehicle["location"]["latitude"], 30.2672)
         self.assertEqual(vehicle["reportedAt"], "2026-08-25T12:02:00Z")
+
+    def test_normalize_vehicle_bounds_api_supplied_strings(self):
+        huge = "A" * 5000
+        vehicle = normalize_vehicle(
+            {"id": huge, "vin": huge, "name": huge, "vehicle": {"model": huge, "modelYear": huge}},
+            {
+                "powerState": record(huge),
+                "chargerState": record(huge),
+                "cabinPreconditioningType": record(huge),
+                "otaCurrentVersion": record(huge),
+                "cloudConnection": {"isOnline": huge, "lastSync": huge},
+            },
+            False,
+        )
+        bounded = (
+            vehicle["id"], vehicle["name"], vehicle["model"], vehicle["powerState"],
+            vehicle["softwareVersion"], vehicle["lastConnection"], vehicle["reportedAt"],
+            vehicle["charging"]["state"], vehicle["climate"]["mode"],
+        )
+        for value in bounded:
+            self.assertLessEqual(len(value), MAX_TEXT_CHARS)
+        self.assertLessEqual(len(vehicle["vinSuffix"]), 6)
+        # Non-string passthroughs were unbounded too: an arbitrary JSON value
+        # here defeats a per-string cap on its own.
+        self.assertIsNone(vehicle["modelYear"])
+        self.assertIsNone(vehicle["online"])
+
+    def test_normalize_vehicle_keeps_ordinary_values_intact(self):
+        vehicle = normalize_vehicle(
+            {"id": "vehicle-1", "vin": "7FCTGAAA1NN012345", "name": "Adventure", "vehicle": {"model": "R1T", "modelYear": 2024}},
+            {"otaCurrentVersion": record("2026.14.02"), "cloudConnection": {"isOnline": True, "lastSync": "2026-08-25T12:02:00Z"}},
+            False,
+        )
+        self.assertEqual(vehicle["name"], "Adventure")
+        self.assertEqual(vehicle["modelYear"], 2024)
+        self.assertIs(vehicle["online"], True)
+        self.assertEqual(vehicle["softwareVersion"], "2026.14.02")
+
+    def test_state_built_from_oversized_api_strings_can_be_read_back(self):
+        """The helper must never write a state.json its own reader refuses."""
+        huge = "A" * 5000
+        vehicles = []
+        for index in range(MAX_VEHICLES):
+            vehicles.append(normalize_vehicle(
+                {"id": f"{index}-{huge}", "vin": huge, "name": huge, "vehicle": {"model": huge, "modelYear": 2024}},
+                {
+                    "powerState": record(huge, huge),
+                    "chargerState": record(huge, huge),
+                    "cabinPreconditioningType": record(huge, huge),
+                    "otaCurrentVersion": record(huge, huge),
+                    "cloudConnection": {"isOnline": True, "lastSync": huge},
+                    "gnssLocation": {"latitude": 1.0, "longitude": 2.0, "isAuthorized": True, "timeStamp": huge},
+                },
+                True,
+            ))
+        payload = {
+            "schemaVersion": 1, "status": "linked", "message": "", "polledAt": "2026-08-25T12:00:00Z",
+            "selectedVehicleId": vehicles[0]["id"], "locationEnabled": True, "vehicles": vehicles,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            with mock.patch.object(store, "STATE_FILE", path):
+                store.write_state(payload)
+                recovered = store.read_state()
+                written = path.stat().st_size
+        self.assertLessEqual(written, store.MAX_LOCAL_JSON_BYTES)
+        self.assertEqual(recovered["status"], "linked")
+        self.assertEqual(len(recovered["vehicles"]), MAX_VEHICLES)
 
     def test_vehicle_state_uses_parallax_when_legacy_security_is_missing(self):
         client = RivianReadClient()
@@ -235,6 +307,24 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertFalse(vehicle["climate"]["active"])
+
+    def test_vehicle_list_rejects_malformed_shapes(self):
+        client = RivianReadClient()
+        for current_user in ("invalid", ["invalid"], {"vehicles": ["invalid"]}):
+            with self.subTest(current_user=current_user):
+                client._post = lambda *args, value=current_user, **kwargs: {
+                    "currentUser": value
+                }
+                with self.assertRaisesRegex(ApiError, "vehicle list response changed"):
+                    client.vehicles()
+
+    def test_vehicle_list_rejects_unbounded_fanout(self):
+        client = RivianReadClient()
+        client._post = lambda *args, **kwargs: {
+            "currentUser": {"vehicles": [{"id": str(index)} for index in range(33)]}
+        }
+        with self.assertRaisesRegex(ApiError, "too many vehicles"):
+            client.vehicles()
 
     def test_vehicle_artwork_prefers_large_dark_side_render(self):
         client = RivianReadClient()

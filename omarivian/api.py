@@ -6,19 +6,21 @@ public request method and no vehicle-control mutation in this package.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .parallax import ParallaxError, snapshot as parallax_snapshot
+from .parallax import ParallaxAuthenticationError, ParallaxError, snapshot as parallax_snapshot
 
 GATEWAY = "https://rivian.com/api/gql/gateway/graphql"
 USER_AGENT = "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
 CLIENT_NAME = "com.rivian.ios.consumer-apollo-ios"
 MAX_GRAPHQL_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_VEHICLES = 32
 _READ_CHUNK_BYTES = 64 * 1024
 
 
@@ -47,18 +49,35 @@ def _origin(value: str) -> tuple[str, str, int | None]:
     return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
 
 
-def _read_capped(response: Any, max_bytes: int, description: str) -> bytes:
+def _set_response_timeout(response: Any, timeout: float) -> None:
+    """Apply a remaining deadline to urllib's underlying socket when available."""
+    stream = getattr(response, "fp", None)
+    raw = getattr(stream, "raw", None)
+    sock = getattr(raw, "_sock", None)
+    if sock is not None:
+        sock.settimeout(timeout)
+
+
+def _read_capped(
+    response: Any, max_bytes: int, description: str, *, timeout: float | None = None
+) -> bytes:
     content_length = response.headers.get("Content-Length")
     if content_length:
         try:
             if int(content_length) > max_bytes:
                 raise ApiError(f"{description} was too large")
         except ValueError:
-            pass
+            content_length = None
     chunks = []
     total = 0
+    deadline = time.monotonic() + timeout if timeout is not None else None
     while total <= max_bytes:
-        chunk = response.read(min(_READ_CHUNK_BYTES, max_bytes + 1 - total))
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ApiError(f"{description} timed out")
+            _set_response_timeout(response, remaining)
+        chunk = response.read1(min(_READ_CHUNK_BYTES, max_bytes + 1 - total))
         if not chunk:
             break
         chunks.append(chunk)
@@ -116,7 +135,12 @@ class RivianReadClient:
             with _NO_REDIRECT_OPENER.open(request, timeout=self.timeout) as response:  # nosec B310
                 if _origin(response.geturl()) != _origin(GATEWAY):
                     raise ApiError("Rivian response changed origin")
-                raw = _read_capped(response, MAX_GRAPHQL_RESPONSE_BYTES, "Rivian response")
+                raw = _read_capped(
+                    response,
+                    MAX_GRAPHQL_RESPONSE_BYTES,
+                    "Rivian response",
+                    timeout=float(self.timeout),
+                )
         except HTTPError as exc:
             code = exc.code
             exc.close()
@@ -130,13 +154,25 @@ class RivianReadClient:
             raise SchemaError("Rivian response was not valid JSON") from exc
         if not isinstance(body, dict):
             raise SchemaError("Rivian response was not a JSON object")
-        errors = body.get("errors") or []
+        errors = body.get("errors", [])
+        if errors is None:
+            errors = []
+        if not isinstance(errors, list):
+            raise SchemaError("Rivian response contained malformed errors")
         if errors:
             first = errors[0]
-            code = (first.get("extensions") or {}).get("code", "")
-            reason = (first.get("extensions") or {}).get("reason", "")
+            if not isinstance(first, dict):
+                raise SchemaError("Rivian response contained malformed errors")
+            extensions = first.get("extensions")
+            if extensions is None:
+                extensions = {}
+            if not isinstance(extensions, dict):
+                raise SchemaError("Rivian response contained malformed errors")
+            code = str(extensions.get("code") or "")
+            reason = str(extensions.get("reason") or "")
             if code == "UNAUTHENTICATED": raise AuthenticationError("Rivian sign-in expired")
-            raise ApiError(first.get("message") or reason or code or "Rivian API error")
+            message = str(first.get("message") or reason or code or "Rivian API error")
+            raise ApiError(message[:1024])
         data = body.get("data")
         if not isinstance(data, dict): raise SchemaError("Rivian response did not contain data")
         return data
@@ -194,9 +230,14 @@ class RivianReadClient:
 
     def vehicles(self) -> list[dict[str, Any]]:
         query = "query getUserInfo { currentUser { vehicles { id vin name vehicle { modelYear model } } } }"
-        user = self._post("getUserInfo", query, None, authenticated=True).get("currentUser") or {}
+        user = self._post("getUserInfo", query, None, authenticated=True).get("currentUser")
+        if not isinstance(user, dict):
+            raise SchemaError("Rivian vehicle list response changed")
         vehicles = user.get("vehicles")
-        if not isinstance(vehicles, list): raise SchemaError("Rivian vehicle list response changed")
+        if not isinstance(vehicles, list) or not all(isinstance(item, dict) for item in vehicles):
+            raise SchemaError("Rivian vehicle list response changed")
+        if len(vehicles) > MAX_VEHICLES:
+            raise SchemaError("Rivian returned too many vehicles")
         return vehicles
 
     def vehicle_artwork(self, vehicle_ids: set[str]) -> dict[str, str]:
@@ -241,7 +282,9 @@ class RivianReadClient:
                 if not _is_rivian_https_url(response.geturl()):
                     raise ApiError("Rivian artwork response changed origin")
                 content_type = response.headers.get_content_type()
-                body = _read_capped(response, max_bytes, "Rivian artwork response")
+                body = _read_capped(
+                    response, max_bytes, "Rivian artwork response", timeout=float(self.timeout)
+                )
         except HTTPError as exc:
             code = exc.code
             exc.close()
@@ -265,6 +308,8 @@ class RivianReadClient:
                 csrf_token=self.tokens.csrf_token,
                 timeout=min(float(self.timeout), 8.0),
             )
+        except ParallaxAuthenticationError as exc:
+            raise AuthenticationError("Rivian sign-in expired") from exc
         except (ParallaxError, OSError, TimeoutError):
             # Newer telemetry is a compatibility fallback. A bounded failure must
             # not discard otherwise useful legacy state from an R1 or R2.

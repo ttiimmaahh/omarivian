@@ -34,4 +34,29 @@ assert.equal(
   ),
   "Cached status · Last connected 56 min ago"
 );
+
+// The bar tooltip is drawn by an upstream Text that defaults to Text.AutoText,
+// so vehicle-supplied markup would reach Qt's HTML renderer and fetch a remote
+// <img>. "<" is the only character that can open a tag; entities cannot.
+assert.equal(M.plainText('<img src="http://attacker/beacon.png">R1T'), 'img src="http://attacker/beacon.png">R1T');
+assert.equal(M.plainText("<b>R1T</b>"), "b>R1T/b>");
+assert.equal(M.plainText("Tom & Jerry"), "Tom & Jerry", "entities are inert and must survive");
+assert.equal(M.plainText("R1T"), "R1T");
+assert.equal(M.plainText(null), "");
+
+const hostile = M.parseState(JSON.stringify({
+  status: "linked",
+  polledAt: "2026-08-25T12:00:00Z",
+  selectedVehicleId: "one",
+  vehicles: [
+    { id: "one", name: '<img src="http://attacker/beacon.png">R1T', battery: { percent: 50, rangeKm: 100 }, charging: {}, security: {}, climate: {} }
+  ]
+}));
+const tip = M.tooltipText(hostile, { unit: "metric" }, Date.parse("2026-08-25T12:00:00Z"));
+assert.ok(!tip.includes("<"), "tooltip text must not carry a tag opener into an AutoText renderer");
+assert.ok(tip.includes("beacon.png"), "sanitising must not silently drop the rest of the name");
+
+const broken = M.parseState("not json");
+assert.ok(!M.tooltipText(broken, {}, Date.now()).includes("<"));
+
 console.log("Model.js tests passed");

@@ -77,6 +77,7 @@ BarWidget {
       anchors.leftMargin: Style.space(4)
       anchors.verticalCenter: parent.verticalCenter
       text: button.chargeLabel
+      textFormat: Text.PlainText
       color: button.foreground
       font.family: button.fontFamily
       font.pixelSize: Style.font.caption

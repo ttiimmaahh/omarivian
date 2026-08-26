@@ -62,8 +62,12 @@ class ParallaxError(RuntimeError):
     """A sanitized Parallax transport or protocol failure."""
 
 
+class ParallaxAuthenticationError(ParallaxError):
+    """A sanitized Parallax session/authentication failure."""
+
+
 def _header_value(value: str) -> str:
-    if "\r" in value or "\n" in value:
+    if "\r" in value or "\n" in value or not value.isascii():
         raise ParallaxError("Invalid Rivian session metadata")
     return value
 
@@ -234,16 +238,27 @@ class _WebSocket:
     def __init__(self, stream: socket.socket, buffered: bytes = b""):
         self.stream = stream
         self.buffer = bytearray(buffered)
+        self.deadline: float | None = None
+
+    def set_deadline(self, deadline: float | None) -> None:
+        self.deadline = deadline
 
     def close(self) -> None:
         try:
             self.send_frame(0x8, b"\x03\xe8")
         except (OSError, ParallaxError):
-            pass
+            # Best-effort close: the transport is closed below either way.
+            self.stream.close()
+            return
         self.stream.close()
 
     def _read_exact(self, length: int) -> bytes:
         while len(self.buffer) < length:
+            if self.deadline is not None:
+                remaining = self.deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ParallaxError("Rivian Parallax snapshot timed out")
+                self.stream.settimeout(remaining)
             chunk = self.stream.recv(min(65536, length - len(self.buffer)))
             if not chunk:
                 raise ParallaxError("Rivian closed the Parallax connection")
@@ -319,6 +334,14 @@ class _WebSocket:
 
 
 def _open_socket(headers: dict[str, str], timeout: float) -> _WebSocket:
+    deadline = time.monotonic() + max(0.001, timeout)
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise ParallaxError("Rivian Parallax handshake timed out")
+        return value
+
     key = base64.b64encode(os.urandom(16)).decode()
     lines = [
         f"GET {PATH} HTTP/1.1",
@@ -331,13 +354,15 @@ def _open_socket(headers: dict[str, str], timeout: float) -> _WebSocket:
     ]
     lines.extend(f"{name}: {_header_value(value)}" for name, value in headers.items() if value)
     request = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
-    raw = socket.create_connection((HOST, 443), timeout=timeout)
+    raw = socket.create_connection((HOST, 443), timeout=remaining())
     try:
+        raw.settimeout(remaining())
         stream = ssl.create_default_context().wrap_socket(raw, server_hostname=HOST)
-        stream.settimeout(timeout)
+        stream.settimeout(remaining())
         stream.sendall(request)
         response = bytearray()
         while b"\r\n\r\n" not in response:
+            stream.settimeout(remaining())
             chunk = stream.recv(4096)
             if not chunk:
                 raise ParallaxError("Rivian rejected the Parallax connection")
@@ -360,7 +385,11 @@ def _open_socket(headers: dict[str, str], timeout: float) -> _WebSocket:
         accept_source = (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
         accept_digest = hashlib.new("sha1", accept_source, usedforsecurity=False).digest()
         expected = base64.b64encode(accept_digest).decode()
-        if len(status) < 2 or status[1] != "101":
+        if len(status) < 2:
+            raise ParallaxError("Rivian rejected the Parallax connection")
+        if status[1] in {"401", "403"}:
+            raise ParallaxAuthenticationError("Rivian Parallax session expired")
+        if status[1] != "101":
             raise ParallaxError("Rivian rejected the Parallax connection")
         if response_headers.get("upgrade", "").lower() != "websocket":
             raise ParallaxError("Invalid Rivian Parallax handshake")
@@ -384,6 +413,15 @@ def _message(websocket: _WebSocket) -> dict[str, Any]:
     if not isinstance(message, dict):
         raise ParallaxError("Invalid Rivian Parallax message")
     return message
+
+
+def _is_authentication_error(message: dict[str, Any]) -> bool:
+    payload = message.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    extensions = payload.get("extensions")
+    code = extensions.get("code") if isinstance(extensions, dict) else payload.get("code")
+    return str(code).upper() in {"401", "403", "UNAUTHENTICATED", "UNAUTHORIZED"}
 
 
 def snapshot(
@@ -431,6 +469,7 @@ def snapshot(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ParallaxError("Rivian Parallax snapshot timed out")
+            websocket.set_deadline(deadline)
             websocket.stream.settimeout(remaining)
             message = _message(websocket)
             kind = message.get("type")
@@ -439,7 +478,11 @@ def snapshot(
                 continue
             if kind == "connection_ack":
                 break
-            if kind in {"connection_error", "error", "complete"}:
+            if kind in {"connection_error", "error"}:
+                if _is_authentication_error(message):
+                    raise ParallaxAuthenticationError("Rivian Parallax session expired")
+                raise ParallaxError("Rivian rejected the Parallax session")
+            if kind == "complete":
                 raise ParallaxError("Rivian rejected the Parallax session")
         websocket.send_json({
             "type": "subscribe",
@@ -454,6 +497,7 @@ def snapshot(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
+            websocket.set_deadline(deadline)
             websocket.stream.settimeout(remaining)
             message = _message(websocket)
             kind = message.get("type")

@@ -26,6 +26,9 @@ from .store import (
 )
 
 
+MAX_TEXT_CHARS = 256
+
+
 class NoLinkedAccount(AuthenticationError):
     """Raised when the user has not linked an account yet."""
 
@@ -38,9 +41,14 @@ def _record(value: Any) -> Any:
     return value.get("value") if isinstance(value, dict) else None
 
 
+def _text(value: Any) -> str:
+    """Bound an API-supplied string so state.json stays inside the read limit."""
+    return str(value)[:MAX_TEXT_CHARS]
+
+
 def _timestamp(value: Any) -> str | None:
     stamp = value.get("timeStamp") if isinstance(value, dict) else None
-    return str(stamp) if stamp else None
+    return _text(stamp) if stamp else None
 
 
 def _number(value: Any) -> float | None:
@@ -97,7 +105,7 @@ def _latest_timestamp(state: dict[str, Any]) -> str | None:
     ]
     cloud = state.get("cloudConnection") or {}
     if cloud.get("lastSync"):
-        stamps.append(str(cloud["lastSync"]))
+        stamps.append(_text(cloud["lastSync"]))
     return max(stamps) if stamps else None
 
 
@@ -130,10 +138,10 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
         security = "unknown"
     open_closures = [name for name, closed in doors.items() if isinstance(closed, bool) and not closed]
 
-    raw_power_state = str(_record(state.get("powerState")) or "unknown")
+    raw_power_state = _text(_record(state.get("powerState")) or "unknown")
     driving = raw_power_state.strip().lower() == "go"
     power_state = "driving" if driving else raw_power_state
-    charger = str(_record(state.get("chargerState")) or _record(state.get("chargerStatus")) or "unknown")
+    charger = _text(_record(state.get("chargerState")) or _record(state.get("chargerStatus")) or "unknown")
     lower_charger = charger.lower()
     charging = "charging" in lower_charger and not any(word in lower_charger for word in ("not", "done", "complete"))
     plugged = charging or any(word in lower_charger for word in ("connected", "plugged", "ready", "complete"))
@@ -157,16 +165,18 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
         if latitude is not None and longitude is not None:
             location = {"latitude": latitude, "longitude": longitude, "reportedAt": _timestamp(location_record)}
 
+    model_year = details.get("modelYear")
+    online = (state.get("cloudConnection") or {}).get("isOnline")
     distance_km = _number(_record(state.get("distanceToEmpty")))
     odometer_m = _number(_record(state.get("vehicleMileage")))
     return {
-        "id": str(summary.get("id") or ""),
-        "name": str(summary.get("name") or details.get("model") or "Rivian"),
-        "model": str(details.get("model") or "Rivian"),
-        "modelYear": details.get("modelYear"),
+        "id": _text(summary.get("id") or ""),
+        "name": _text(summary.get("name") or details.get("model") or "Rivian"),
+        "model": _text(details.get("model") or "Rivian"),
+        "modelYear": model_year if isinstance(model_year, int) and not isinstance(model_year, bool) else _number(model_year),
         "vinSuffix": str(summary.get("vin") or "")[-6:],
         "reportedAt": _latest_timestamp(state),
-        "online": (state.get("cloudConnection") or {}).get("isOnline"),
+        "online": online if isinstance(online, bool) else None,
         "powerState": power_state,
         "battery": {
             "percent": _number(_record(state.get("batteryLevel"))),
@@ -184,12 +194,12 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
             "cabinC": _number(_record(state.get("cabinClimateInteriorTemperature"))),
             "targetC": _number(_record(state.get("cabinClimateDriverTemperature"))),
             "active": climate_active,
-            "mode": str(_record(state.get("cabinPreconditioningType")) or ""),
+            "mode": _text(_record(state.get("cabinPreconditioningType")) or ""),
         },
         "location": location,
         "odometerKm": odometer_m / 1000 if odometer_m is not None else None,
-        "softwareVersion": str(_record(state.get("otaCurrentVersion")) or ""),
-        "lastConnection": str((state.get("cloudConnection") or {}).get("lastSync") or ""),
+        "softwareVersion": _text(_record(state.get("otaCurrentVersion")) or ""),
+        "lastConnection": _text((state.get("cloudConnection") or {}).get("lastSync") or ""),
     }
 
 
@@ -268,14 +278,23 @@ def command_refresh(args: argparse.Namespace) -> int:
         write_state(sanitized)
     try:
         client = _load_client()
-        try:
-            vehicles = client.vehicles()
-        except AuthenticationError:
-            client.refresh_session()
-            # Refresh tokens rotate. Persist the replacement before any later
-            # API work can fail, or the next poll may reuse an invalidated token.
-            save_tokens(client.tokens.to_json())
-            vehicles = client.vehicles()
+        refreshed_session = False
+
+        def authenticated_request(call):
+            nonlocal refreshed_session
+            try:
+                return call()
+            except AuthenticationError:
+                if refreshed_session:
+                    raise
+                client.refresh_session()
+                # Refresh tokens rotate. Persist the replacement before any later
+                # API work can fail, or the next poll may reuse an invalidated token.
+                save_tokens(client.tokens.to_json())
+                refreshed_session = True
+                return call()
+
+        vehicles = authenticated_request(client.vehicles)
         selected = str(prefs.get("selectedVehicleId") or "")
         if not any(str(v.get("id")) == selected for v in vehicles):
             selected = str(vehicles[0].get("id") or "") if vehicles else ""
@@ -287,8 +306,10 @@ def command_refresh(args: argparse.Namespace) -> int:
                 cached["location"] = None
         artwork_urls: dict[str, str] = {}
         try:
-            artwork_urls = client.vehicle_artwork({str(v.get("id") or "") for v in vehicles})
-        except ApiError:
+            artwork_urls = authenticated_request(lambda: client.vehicle_artwork({str(v.get("id") or "") for v in vehicles}))
+        except ApiError as exc:
+            if isinstance(exc, AuthenticationError):
+                raise
             # Artwork is optional; telemetry remains useful when its CDN or
             # manifest is temporarily unavailable.
             artwork_urls = {}
@@ -298,7 +319,11 @@ def command_refresh(args: argparse.Namespace) -> int:
             prior_item = prior.get(vehicle_id) or {}
             prior_artwork = prior_item.get("artwork")
             if vehicle_id == selected:
-                item = normalize_vehicle(vehicle, client.vehicle_state(vehicle_id, include_location), include_location)
+                item = normalize_vehicle(
+                    vehicle,
+                    authenticated_request(lambda: client.vehicle_state(vehicle_id, include_location)),
+                    include_location,
+                )
             else:
                 item = prior_item or normalize_vehicle(vehicle, {}, False)
             item["artwork"] = prior_artwork
@@ -334,9 +359,25 @@ def command_select(args: argparse.Namespace) -> int:
 
 
 def command_unlink(_: argparse.Namespace) -> int:
-    clear_tokens()
-    clear_local_data()
-    write_state({"schemaVersion": 1, "status": "unlinked", "message": "", "polledAt": _now(), "locationEnabled": False, "vehicles": []})
+    try:
+        clear_tokens()
+    except RuntimeError as exc:
+        print(f"Unlink failed: {exc}", file=sys.stderr)
+        return 1
+    failures = clear_local_data()
+    # The credentials really are gone, so the panel must show "unlinked" either
+    # way. Exit above the panel's stderr threshold (Panel.qml onExited uses
+    # exitCode > 3) so leftover identifying files are not reported silently.
+    try:
+        write_state({"schemaVersion": 1, "status": "unlinked", "message": "", "polledAt": _now(), "locationEnabled": False, "vehicles": []})
+    except (OSError, RuntimeError):
+        from .store import STATE_FILE
+
+        if STATE_FILE not in failures:
+            failures.append(STATE_FILE)
+    if failures:
+        print(f"Unlink cleared the Rivian session but could not delete: {', '.join(str(path) for path in failures)}", file=sys.stderr)
+        return 4
     return 0
 
 

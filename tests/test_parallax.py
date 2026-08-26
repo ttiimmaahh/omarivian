@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from omarivian.parallax import ParallaxError, _WebSocket, decode_topic, snapshot
+from omarivian.parallax import ParallaxAuthenticationError, ParallaxError, _WebSocket, _header_value, _open_socket, decode_topic, snapshot
 
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "parallax_r2_security.json").read_text())
@@ -25,6 +25,10 @@ class FakeWebSocket:
         self.messages = list(messages)
         self.sent = []
         self.closed = False
+        self.deadlines = []
+
+    def set_deadline(self, value):
+        self.deadlines.append(value)
 
     def send_json(self, value):
         self.sent.append(value)
@@ -194,6 +198,41 @@ class ParallaxTests(unittest.TestCase):
         self.assertEqual(result["gnssLocation"]["latitude"], 35.0)
         self.assertEqual(result["gnssLocation"]["longitude"], -80.0)
 
+    def test_snapshot_reports_explicit_connection_auth_error(self):
+        websocket = FakeWebSocket([
+            {"type": "connection_error", "payload": {"extensions": {"code": "UNAUTHENTICATED"}}}
+        ])
+        dialer: Any = lambda _headers, _timeout: websocket
+
+        with self.assertRaises(ParallaxAuthenticationError):
+            snapshot(
+                "vehicle-1",
+                {"body.locks.states"},
+                app_session_token="app",
+                user_session_token="expired-user-session",
+                csrf_token="csrf",
+                dialer=dialer,
+            )
+        self.assertTrue(websocket.closed)
+
+    def test_snapshot_keeps_generic_connection_error_as_fallback_failure(self):
+        websocket = FakeWebSocket([
+            {"type": "connection_error", "payload": {"message": "service unavailable"}}
+        ])
+        dialer: Any = lambda _headers, _timeout: websocket
+
+        with self.assertRaises(ParallaxError) as raised:
+            snapshot(
+                "vehicle-1",
+                {"body.locks.states"},
+                app_session_token="app",
+                user_session_token="session",
+                csrf_token="csrf",
+                dialer=dialer,
+            )
+        self.assertNotIsInstance(raised.exception, ParallaxAuthenticationError)
+        self.assertTrue(websocket.closed)
+
     def test_snapshot_rejects_malformed_graphql_shapes_as_fallback_errors(self):
         websocket = FakeWebSocket([
             {"type": "connection_ack"},
@@ -262,6 +301,28 @@ class ParallaxTests(unittest.TestCase):
         self.assertEqual(websocket.receive_text(), '{"type":"next"}')
         self.assertEqual(stream.sent[0] & 0x0F, 0x0A)
         self.assertTrue(stream.sent[1] & 0x80)
+
+    def test_non_ascii_session_metadata_is_rejected_as_parallax_error(self):
+        """.encode("ascii") would raise UnicodeEncodeError, which no caller catches."""
+        for value in ("sess-\u00e9", "sess-\u2028", "\u0130token"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ParallaxError, "Invalid Rivian session metadata"):
+                    _header_value(value)
+
+    def test_header_injection_is_still_rejected(self):
+        for value in ("token\r\nX-Evil: 1", "token\nX-Evil: 1", "token\r"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ParallaxError, "Invalid Rivian session metadata"):
+                    _header_value(value)
+
+    def test_plain_ascii_session_metadata_is_accepted(self):
+        self.assertEqual(_header_value("Bearer abc.123-_=="), "Bearer abc.123-_==")
+
+    def test_handshake_rejects_non_ascii_metadata_before_touching_the_network(self):
+        # _open_socket builds the request then connects; a bad header must fail
+        # as ParallaxError so api.parallax_state and cli.command_refresh catch it.
+        with self.assertRaises(ParallaxError):
+            _open_socket({"A-Sess": "sess-\u00e9"}, 5.0)
 
     def test_websocket_rejects_masked_server_frames(self):
         stream_for_test: Any = ByteStream(server_frame(0x1, b"bad", masked=True))

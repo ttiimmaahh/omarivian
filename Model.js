@@ -15,6 +15,12 @@ function imperial(settings, localeName) {
   return /^en[_-]US($|[_.-])/.test(String(localeName || "").replace(".", "_"));
 }
 function join(parts, sep) { return parts.filter((p) => text(p)).join(sep); }
+// Omarchy's bar tooltip and WidgetButton render their text with an upstream
+// Text that defaults to Text.AutoText, so vehicle-supplied markup would reach
+// the HTML renderer (and fetch remote <img> sources). Neither exposes a
+// plain-text mode, so strip the only character that can open a tag; entities on
+// their own cannot synthesise one.
+function plainText(v) { return text(v).replace(/</g, ""); }
 
 function refreshIntervalSec(settings) {
   var n = isObject(settings) ? num(settings.refreshIntervalSec) : null;
@@ -309,12 +315,12 @@ function barLabel(state, settings, horizontal) {
 
 function tooltipText(state, settings, nowMs) {
   var kind = statusKind(state);
-  if (kind !== "ok") return "OmaRivian · " + statusBanner(kind, state).title;
+  if (kind !== "ok") return plainText("OmaRivian · " + statusBanner(kind, state).title);
   var v = selectVehicle(state, "");
   if (!v) return "OmaRivian";
-  return vehicleTitle(v) + " · " + formatPercent(v.battery.percent) + " · "
+  return plainText(vehicleTitle(v) + " · " + formatPercent(v.battery.percent) + " · "
     + formatDistance(v.battery.rangeKm, imperial(settings, settings ? settings.localeName : ""))
-    + "\nUpdated " + formatAge(state.polledAt, nowMs);
+    + "\nUpdated " + formatAge(state.polledAt, nowMs));
 }
 
 if (typeof module === "object" && module !== null && module.exports) {
@@ -326,6 +332,7 @@ if (typeof module === "object" && module !== null && module.exports) {
     formatOdometer: formatOdometer, formatPercent: formatPercent, formatTemp: formatTemp, fraction: fraction,
     headerSubtitle: headerSubtitle, imperial: imperial, isStale: isStale, locationLabel: locationLabel,
     mapsUrl: mapsUrl, normalizeState: normalizeState, normalizeVehicle: normalizeVehicle, parseState: parseState,
+    plainText: plainText,
     refreshIntervalSec: refreshIntervalSec, roundCoord: roundCoord, securityLabel: securityLabel,
     selectVehicle: selectVehicle, statusBanner: statusBanner, statusKind: statusKind, titleCase: titleCase,
     tooltipText: tooltipText, vehicleSubtitle: vehicleSubtitle, vehicleTitle: vehicleTitle
