@@ -9,6 +9,8 @@ A read-only Rivian status widget for the Omarchy Quattro bar. Click the Rivian-i
 
 OmaRivian is in early development and is not yet a production release. Expect continued testing and interface or API changes before its first verified marketplace submission.
 
+R2 telemetry is validated against the maintainer's vehicle. The legacy R1 path is intentionally retained, but the maintainer does not own an R1 and cannot fully validate it firsthand. R1 owners are especially welcome to test the widget and report model/year, missing fields, or regressions through GitHub issues.
+
 ## Highlights
 
 - Compact, theme-native bar panel inspired by mobile vehicle widgets
@@ -75,7 +77,8 @@ The QML panel invokes a narrow local helper. That helper contains only:
 
 - Authentication operations required to establish a session
 - `getUserInfo` to enumerate vehicles
-- `GetVehicleState` to read an allowlisted set of status fields
+- `GetVehicleState` to read an allowlisted set of legacy R1 status fields
+- A bounded, read-only `ParallaxMessages` snapshot for missing R2 lock, closure, power-state, and opt-in location fields
 - `getVehicleImages` to discover Rivian's configured, display-only vehicle render
 
 There is no generic query CLI and no vehicle command implementation. Session tokens are stored under the `omarivian` application label through Secret Service. The sanitized state cache is mode `0600` and contains vehicle status plus identity summaries; full VINs are never written. Vehicle artwork is downloaded only from Rivian-controlled HTTPS hosts into `~/.cache/omarivian/vehicle-artwork`, using mode `0700` directories and mode `0600` image files. QML loads the local file and never contacts Rivian directly. Unlinking removes that artwork cache.
@@ -99,6 +102,15 @@ rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/omarivian" \
 ```
 
 ## Development
+
+### Omarchy scaling conventions
+
+The shell derives typography and layout density from the user's theme and display preferences. QML contributions should:
+
+- Use `Style.font.*` for text and icon sizes.
+- Use `Style.space(...)` or semantic `Style.spacing.*` tokens for dimensions, margins, padding, gaps, controls, and hairlines.
+- Use `Style.bar.*` for bar geometry and `fittedContentWidth` / `fittedContentHeight` for panels.
+- Avoid manual device-pixel-ratio scaling and raw visual pixel sizes; reserve unscaled numbers for ratios, opacity, timing, and source-image crop fractions.
 
 ```sh
 omarchy plugin validate .

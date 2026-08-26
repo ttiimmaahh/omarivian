@@ -113,10 +113,19 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
     }
     lock_values = [
         _locked(_record(state.get(key)))
-        for key in ("doorFrontLeftLocked", "doorFrontRightLocked", "doorRearLeftLocked", "doorRearRightLocked")
+        for key in (
+            "doorFrontLeftLocked", "doorFrontRightLocked",
+            "doorRearLeftLocked", "doorRearRightLocked",
+            "closureFrunkLocked", "closureLiftgateLocked",
+        )
     ]
     known_locks = [item for item in lock_values if item is not None]
-    security = "unknown" if not known_locks else ("locked" if all(known_locks) else "unlocked")
+    if known_locks and not all(known_locks):
+        security = "unlocked"
+    elif len(known_locks) == len(lock_values) and all(known_locks):
+        security = "locked"
+    else:
+        security = "unknown"
     open_closures = [name for name, closed in doors.items() if isinstance(closed, bool) and not closed]
 
     charger = str(_record(state.get("chargerState")) or _record(state.get("chargerStatus")) or "unknown")

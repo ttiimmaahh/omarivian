@@ -1,0 +1,11 @@
+{
+  "source": "Redacted live R2 Parallax snapshot captured 2026-08-25; payloads contain only enum ids and states",
+  "endpoint": "wss://api.rivian.com/gql-consumer-subscriptions/graphql",
+  "subprotocol": "graphql-transport-ws",
+  "operation": "ParallaxMessages",
+  "payloads": {
+    "body.closures.states": "CgYIARACIAEKBggCEAIgAQoGCAMQAiABCgYIBBACIAEKCAgFEAIgAzAJCggIBxACIAE4AQoGCAwQAiABCgYIDRACIAEKBggOEAIgAQoGCA8QAiABCgYIEBACIAEKBwiQTiABKAE=",
+    "body.locks.states": "CgQIARABCgQIAhABCgQIAxABCgQIBBABCgQIBRABCgQIBxAB",
+    "vehicle.power.state": "CAE="
+  }
+}

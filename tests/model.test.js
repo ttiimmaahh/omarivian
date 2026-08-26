@@ -18,4 +18,15 @@ assert.equal(M.formatMinutes(95), "1 h 35 min");
 assert.equal(M.barLabel(state, { showChargeInBar: true }, false), "");
 assert.equal(M.statusKind(M.parseState("not json")), "schema-error");
 assert.match(M.mapsUrl(state.vehicles[0]), /^https:\/\/www\.openstreetmap\.org\//);
+assert.equal(M.connectionLabel({ online: false, powerState: "sleeping" }), "Offline · Sleeping");
+assert.equal(
+  M.cachedStatusLabel(
+    "ok",
+    { polledAt: "2026-08-25T12:00:00Z" },
+    { lastConnection: "2026-08-25T11:04:00Z", reportedAt: "2026-08-25T11:04:00Z" },
+    "",
+    Date.parse("2026-08-25T12:00:00Z")
+  ),
+  "Cached status · Last connected 56 min ago"
+);
 console.log("Model.js tests passed");

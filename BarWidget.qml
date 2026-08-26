@@ -58,8 +58,8 @@ BarWidget {
 
     Image {
       id: brandMark
-      width: Style.bar.iconCanvas
-      height: Style.bar.iconCanvas
+      width: Style.bar.iconCanvas - Style.space(2)
+      height: Style.bar.iconCanvas - Style.space(2)
       anchors.verticalCenter: parent.verticalCenter
       anchors.horizontalCenter: button.chargeLabel === "" ? parent.horizontalCenter : undefined
       anchors.left: button.chargeLabel !== "" ? parent.left : undefined

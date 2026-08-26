@@ -13,6 +13,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from .parallax import ParallaxError, snapshot as parallax_snapshot
+
 GATEWAY = "https://rivian.com/api/gql/gateway/graphql"
 USER_AGENT = "RivianApp/707 CFNetwork/1237 Darwin/20.4.0"
 CLIENT_NAME = "com.rivian.ios.consumer-apollo-ios"
@@ -178,6 +180,21 @@ class RivianReadClient:
             raise ApiError("Rivian artwork format was not supported")
         return body, extension
 
+    def parallax_state(self, vehicle_id: str, topics: set[str]) -> dict[str, Any]:
+        try:
+            return parallax_snapshot(
+                vehicle_id,
+                topics,
+                app_session_token=self.tokens.app_session_token,
+                user_session_token=self.tokens.user_session_token,
+                csrf_token=self.tokens.csrf_token,
+                timeout=min(float(self.timeout), 8.0),
+            )
+        except (ParallaxError, OSError, TimeoutError):
+            # Newer telemetry is a compatibility fallback. A bounded failure must
+            # not discard otherwise useful legacy state from an R1 or R2.
+            return {}
+
     def vehicle_state(self, vehicle_id: str, include_location: bool) -> dict[str, Any]:
         fields = [
             "cloudConnection { lastSync isOnline }", "powerState { timeStamp value }",
@@ -192,10 +209,74 @@ class RivianReadClient:
             "doorFrontLeftLocked { timeStamp value }", "doorFrontRightLocked { timeStamp value }",
             "doorRearLeftLocked { timeStamp value }", "doorRearRightLocked { timeStamp value }",
             "closureFrunkClosed { timeStamp value }", "closureLiftgateClosed { timeStamp value }",
+            "closureFrunkLocked { timeStamp value }", "closureLiftgateLocked { timeStamp value }",
             "closureTailgateClosed { timeStamp value }", "closureTonneauClosed { timeStamp value }",
         ]
-        if include_location: fields.append("gnssLocation { timeStamp latitude longitude isAuthorized }")
         query = "query GetVehicleState($vehicleID: String!) { vehicleState(id: $vehicleID) { " + " ".join(fields) + " } }"
         state = self._post("GetVehicleState", query, {"vehicleID": vehicle_id}, authenticated=True).get("vehicleState")
         if not isinstance(state, dict): raise SchemaError("Rivian vehicle state response changed")
+
+        # Keep optional GNSS isolated: R1 can still use the legacy field, while
+        # R2 may reject that field entirely and continue through Parallax.
+        if include_location:
+            location_query = (
+                "query GetVehicleLocation($vehicleID: String!) { vehicleState(id: $vehicleID) { "
+                "gnssLocation { timeStamp latitude longitude isAuthorized } } }"
+            )
+            try:
+                location_state = self._post(
+                    "GetVehicleLocation",
+                    location_query,
+                    {"vehicleID": vehicle_id},
+                    authenticated=True,
+                ).get("vehicleState")
+            except ApiError as exc:
+                if isinstance(exc, AuthenticationError):
+                    raise
+                # A missing/retired legacy GNSS field is expected on newer
+                # vehicles; the allowlisted Parallax fallback below handles it.
+                location_state = None
+            if isinstance(location_state, dict):
+                state["gnssLocation"] = location_state.get("gnssLocation")
+
+        def has_record(key: str) -> bool:
+            value = state.get(key)
+            return isinstance(value, dict) and value.get("value") is not None
+
+        lock_fields = {
+            "doorFrontLeftLocked", "doorFrontRightLocked",
+            "doorRearLeftLocked", "doorRearRightLocked",
+            "closureFrunkLocked", "closureLiftgateLocked",
+        }
+        closure_fields = {
+            "doorFrontLeftClosed", "doorFrontRightClosed",
+            "doorRearLeftClosed", "doorRearRightClosed",
+            "closureFrunkClosed", "closureLiftgateClosed",
+        }
+        topics: set[str] = set()
+        if any(not has_record(key) for key in lock_fields):
+            topics.add("body.locks.states")
+        if any(not has_record(key) for key in closure_fields):
+            topics.add("body.closures.states")
+        power_record = state.get("powerState")
+        power_value = power_record.get("value") if isinstance(power_record, dict) else None
+        if not isinstance(power_value, str) or power_value.strip().lower() in {"", "unknown"}:
+            topics.add("vehicle.power.state")
+        location = state.get("gnssLocation")
+        if include_location and not (
+            isinstance(location, dict)
+            and isinstance(location.get("latitude"), (int, float))
+            and isinstance(location.get("longitude"), (int, float))
+        ):
+            topics.add("dynamics.vehicle.gnss")
+
+        if topics:
+            fallback = self.parallax_state(vehicle_id, topics)
+            for key, value in fallback.items():
+                current = state.get(key)
+                current_value = current.get("value") if isinstance(current, dict) else None
+                if current is None or current_value is None or (
+                    isinstance(current_value, str) and current_value.strip().lower() == "unknown"
+                ):
+                    state[key] = value
         return state

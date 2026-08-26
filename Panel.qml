@@ -41,7 +41,7 @@ Panel {
   readonly property string omarchyPath: Quickshell.env("OMARCHY_PATH") || "/usr/share/omarchy"
 
   readonly property bool useImperial: Model.imperial(panel.settings, Qt.locale().name)
-  readonly property bool locationEnabled: panel.settings && panel.settings.locationEnabled === true
+  readonly property bool locationEnabled: panel.setting("locationEnabled", false) === true
   readonly property string kind: Model.statusKind(panel.stateData)
   // Fall back to the last good payload so a transient error keeps numbers on screen.
   readonly property var shownState: (panel.kind === "ok" && panel.stateData.vehicles.length > 0) ? panel.stateData : (panel.lastGood || panel.stateData)
@@ -173,13 +173,22 @@ Panel {
     property string label: ""
     property bool active: false
     property bool danger: false
+    property bool iconOnly: false
+    property string tooltipText: ""
     signal activated
 
-    implicitHeight: Math.round(Style.font.body * 2.2)
-    implicitWidth: chipLabel.implicitWidth + Style.space(24)
+    implicitHeight: chip.iconOnly
+      ? Style.spacing.controlHeight
+      : Math.max(
+          Style.spacing.controlHeight,
+          chipLabel.implicitHeight + Style.spacing.controlPaddingY * 2
+        )
+    implicitWidth: chip.iconOnly
+      ? implicitHeight + Style.spacing.controlPaddingX
+      : chipLabel.implicitWidth + Style.spacing.controlPaddingX * 2
     radius: height / 2
     color: chip.active ? Color.accent : panel.subtleSurface
-    border.width: 1
+    border.width: Style.spacing.hairline
     border.color: chip.danger ? Color.urgent : (chip.active ? Color.accent : panel.hairline)
 
     Text {
@@ -187,39 +196,75 @@ Panel {
 
       anchors.centerIn: parent
       text: chip.label
-      font.pixelSize: Style.font.bodySmall
+      font.family: Style.font.family
+      font.pixelSize: chip.iconOnly ? Style.font.iconLarge : Style.font.bodySmall
       color: chip.active ? Color.background : (chip.danger ? Color.urgent : Color.foreground)
     }
 
     MouseArea {
+      id: chipMouse
+
       anchors.fill: parent
+      hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: chip.activated()
     }
+
+    PanelToolTip {
+      visible: chip.tooltipText !== "" && chipMouse.containsMouse
+      text: chip.tooltipText
+      fontFamily: Style.font.family
+    }
   }
 
-  component Fact: Column {
+  component Fact: Item {
     id: fact
 
     property string label: ""
     property string value: ""
+    property bool actionVisible: false
+    property string actionIcon: ""
+    property string actionTooltip: ""
+    signal actionActivated
 
-    spacing: Style.space(2)
+    implicitHeight: Math.max(factText.implicitHeight, factAction.visible ? factAction.implicitHeight : 0)
 
-    Text {
-      width: fact.width
-      text: fact.label
-      font.pixelSize: Style.font.bodySmall
-      color: panel.mutedForeground
-      elide: Text.ElideRight
+    Column {
+      id: factText
+
+      anchors.left: parent.left
+      anchors.right: factAction.visible ? factAction.left : parent.right
+      anchors.rightMargin: factAction.visible ? Style.spacing.controlGap : 0
+      anchors.top: parent.top
+      spacing: Style.space(2)
+
+      Text {
+        width: factText.width
+        text: fact.label
+        font.pixelSize: Style.font.bodySmall
+        color: panel.mutedForeground
+        elide: Text.ElideRight
+      }
+
+      Text {
+        width: factText.width
+        text: fact.value
+        font.pixelSize: Style.font.body
+        color: Color.foreground
+        elide: Text.ElideRight
+      }
     }
 
-    Text {
-      width: fact.width
-      text: fact.value
-      font.pixelSize: Style.font.body
-      color: Color.foreground
-      elide: Text.ElideRight
+    Chip {
+      id: factAction
+
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      visible: fact.actionVisible
+      label: fact.actionIcon
+      iconOnly: true
+      tooltipText: fact.actionTooltip
+      onActivated: fact.actionActivated()
     }
   }
 
@@ -320,6 +365,15 @@ Panel {
               color: panel.mutedForeground
               elide: Text.ElideRight
             }
+
+            Text {
+              width: headerText.width
+              visible: panel.hasData && (panel.kind !== "ok" || panel.stale || panel.helperError !== "")
+              text: Model.cachedStatusLabel(panel.kind, panel.stateData, panel.vehicle, panel.helperError, panel.nowMs)
+              font.pixelSize: Style.font.bodySmall
+              color: (panel.kind === "auth-expired" || panel.kind === "schema-error" || panel.helperError !== "") ? Color.urgent : panel.mutedForeground
+              elide: Text.ElideRight
+            }
           }
 
           Chip {
@@ -332,14 +386,15 @@ Panel {
           }
         }
 
-        // Status / staleness banner; any preserved data stays visible below it.
+        // Keep the full status surface for empty/error states. Cached-data
+        // context lives in the identity header above when vehicle data exists.
         Rectangle {
           width: content.width
-          visible: panel.kind !== "ok" || panel.stale || panel.helperError !== ""
+          visible: !panel.hasData && (panel.kind !== "ok" || panel.helperError !== "")
           implicitHeight: bannerCol.implicitHeight + Style.space(24)
           radius: Style.cornerRadius
           color: panel.subtleSurface
-          border.width: 1
+          border.width: Style.spacing.hairline
           border.color: (panel.kind === "auth-expired" || panel.kind === "schema-error" || panel.helperError !== "") ? Color.urgent : panel.hairline
 
           Column {
@@ -368,15 +423,6 @@ Panel {
               color: panel.mutedForeground
               wrapMode: Text.WordWrap
               visible: text !== ""
-            }
-
-            Text {
-              width: bannerCol.width
-              visible: panel.stale && panel.hasData
-              text: "Showing last known data from " + Model.formatAge(panel.shownState.polledAt, panel.nowMs) + "."
-              font.pixelSize: Style.font.bodySmall
-              color: panel.mutedForeground
-              wrapMode: Text.WordWrap
             }
           }
         }
@@ -488,10 +534,10 @@ Panel {
 
             Rectangle {
               visible: panel.hasData && panel.vehicle.battery.limitPercent !== null
-              width: 2
-              height: parent.height + 4
-              y: -2
-              x: parent.width * Math.max(0, Math.min(1, (panel.hasData && panel.vehicle.battery.limitPercent !== null ? panel.vehicle.battery.limitPercent : 0) / 100)) - 1
+              width: Style.space(2)
+              height: parent.height + Style.space(4)
+              y: -Style.space(2)
+              x: parent.width * Math.max(0, Math.min(1, (panel.hasData && panel.vehicle.battery.limitPercent !== null ? panel.vehicle.battery.limitPercent : 0) / 100)) - width / 2
               color: Color.foreground
             }
           }
@@ -532,19 +578,17 @@ Panel {
               width: (factGrid.width - factGrid.columnSpacing) / 2
               label: modelData.label
               value: modelData.value
+              actionVisible: modelData.label === "Location" && panel.locationEnabled && panel.vehicle.location !== null
+              actionIcon: "\uf279"
+              actionTooltip: "Open in maps"
+              onActionActivated: Qt.openUrlExternally(Model.mapsUrl(panel.vehicle))
             }
           }
         }
 
-        Chip {
-          visible: panel.hasData && panel.locationEnabled && panel.vehicle.location !== null
-          label: "Open in maps"
-          onActivated: Qt.openUrlExternally(Model.mapsUrl(panel.vehicle))
-        }
-
         Rectangle {
           width: content.width
-          height: 1
+          height: Style.spacing.hairline
           color: panel.hairline
           visible: panel.hasData
         }

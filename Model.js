@@ -200,6 +200,17 @@ function isStale(state, nowMs, intervalSec) {
   return ((num(nowMs) === null ? Date.now() : nowMs) - t) > limit;
 }
 
+function cachedStatusLabel(kind, state, vehicle, helperError, nowMs) {
+  if (text(helperError)) return "Refresh failed · Showing cached data";
+  if (kind !== "ok") {
+    var title = statusBanner(kind, state).title || "Status unavailable";
+    return title + " · Showing cached data";
+  }
+  var timestamp = vehicle ? (vehicle.lastConnection || vehicle.reportedAt) : "";
+  var age = formatAge(timestamp, nowMs);
+  return "Cached status" + (age === "—" ? "" : " · Last connected " + age);
+}
+
 function chargingLabel(v) {
   if (!v) return "—";
   var c = v.charging, state = titleCase(c.state);
@@ -303,7 +314,8 @@ function tooltipText(state, settings, nowMs) {
 
 if (typeof module === "object" && module !== null && module.exports) {
   module.exports = {
-    barLabel: barLabel, chargeCaption: chargeCaption, chargingLabel: chargingLabel, climateLabel: climateLabel,
+    barLabel: barLabel, cachedStatusLabel: cachedStatusLabel, chargeCaption: chargeCaption,
+    chargingLabel: chargingLabel, climateLabel: climateLabel,
     connectionLabel: connectionLabel, coordText: coordText, detailRows: detailRows, emptyState: emptyState,
     factRows: factRows, formatAge: formatAge, formatDistance: formatDistance, formatMinutes: formatMinutes,
     formatOdometer: formatOdometer, formatPercent: formatPercent, formatTemp: formatTemp, fraction: fraction,
