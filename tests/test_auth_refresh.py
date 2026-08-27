@@ -1,5 +1,9 @@
 import argparse
+import io
+import json
 import unittest
+from email.message import Message
+from urllib.error import HTTPError
 from unittest import mock
 
 import omarivian.cli as cli
@@ -8,6 +12,155 @@ from omarivian.parallax import ParallaxAuthenticationError
 
 
 class TokenRefreshTests(unittest.TestCase):
+    def test_graphql_http_400_auth_error_triggers_session_renewal(self):
+        body = json.dumps(
+            {
+                "errors": [
+                    {
+                        "message": "Context creation failed: Unauthorized",
+                        "extensions": {"code": "UNAUTHENTICATED"},
+                    }
+                ]
+            }
+        ).encode()
+        headers = Message()
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        error = HTTPError(
+            "https://rivian.com/api/gql/gateway/graphql",
+            400,
+            "Bad Request",
+            headers,
+            io.BytesIO(body),
+        )
+
+        with mock.patch("omarivian.api._NO_REDIRECT_OPENER.open", side_effect=error):
+            with self.assertRaises(AuthenticationError):
+                RivianReadClient()._post("getUserInfo", "query getUserInfo { currentUser { id } }")
+
+    def test_graphql_http_400_later_auth_error_triggers_session_renewal(self):
+        body = json.dumps(
+            {
+                "errors": [
+                    {"message": "Other failure", "extensions": {"code": "BAD_USER_INPUT"}},
+                    {"message": "Expired", "extensions": {"code": "UNAUTHENTICATED"}},
+                ]
+            }
+        ).encode()
+        headers = Message()
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        error = HTTPError(
+            "https://rivian.com/api/gql/gateway/graphql",
+            400,
+            "Bad Request",
+            headers,
+            io.BytesIO(body),
+        )
+
+        with mock.patch("omarivian.api._NO_REDIRECT_OPENER.open", side_effect=error):
+            with self.assertRaises(AuthenticationError):
+                RivianReadClient()._post("getUserInfo", "query getUserInfo { currentUser { id } }")
+
+    def test_graphql_http_400_malformed_error_before_auth_still_renews(self):
+        body = json.dumps(
+            {"errors": ["malformed", {"extensions": {"code": "UNAUTHENTICATED"}}]}
+        ).encode()
+        headers = Message()
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        error = HTTPError(
+            "https://rivian.com/api/gql/gateway/graphql",
+            400,
+            "Bad Request",
+            headers,
+            io.BytesIO(body),
+        )
+
+        with mock.patch("omarivian.api._NO_REDIRECT_OPENER.open", side_effect=error):
+            with self.assertRaises(AuthenticationError):
+                RivianReadClient()._post("getUserInfo", "query getUserInfo { currentUser { id } }")
+
+    def test_graphql_http_200_malformed_error_before_auth_still_renews(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.geturl.return_value = "https://rivian.com/api/gql/gateway/graphql"
+        response.headers = {}
+        response.read1.side_effect = [
+            json.dumps(
+                {"errors": [{"extensions": []}, {"extensions": {"code": "UNAUTHENTICATED"}}]}
+            ).encode(),
+            b"",
+        ]
+
+        with mock.patch("omarivian.api._NO_REDIRECT_OPENER.open", return_value=response):
+            with self.assertRaises(AuthenticationError):
+                RivianReadClient()._post("getUserInfo", "query getUserInfo { currentUser { id } }")
+
+    def test_graphql_http_200_error_does_not_expose_upstream_message(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.geturl.return_value = "https://rivian.com/api/gql/gateway/graphql"
+        response.headers = {}
+        response.read1.side_effect = [
+            json.dumps(
+                {
+                    "errors": [
+                        {
+                            "message": "private upstream marker: account@example.test",
+                            "extensions": {"code": "BAD_USER_INPUT"},
+                        }
+                    ]
+                }
+            ).encode(),
+            b"",
+        ]
+
+        with mock.patch("omarivian.api._NO_REDIRECT_OPENER.open", return_value=response):
+            with self.assertRaisesRegex(cli.ApiError, "Rivian API error") as raised:
+                RivianReadClient()._post("Test", "query Test { test }")
+
+        self.assertNotIn("private upstream marker", str(raised.exception))
+        self.assertNotIn("account@example.test", str(raised.exception))
+
+    def test_graphql_http_400_non_auth_error_stays_generic(self):
+        body = json.dumps(
+            {"errors": [{"message": "Bad input", "extensions": {"code": "BAD_USER_INPUT"}}]}
+        ).encode()
+        headers = Message()
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(body))
+        error = HTTPError(
+            "https://rivian.com/api/gql/gateway/graphql",
+            400,
+            "Bad Request",
+            headers,
+            io.BytesIO(body),
+        )
+
+        with mock.patch("omarivian.api._NO_REDIRECT_OPENER.open", side_effect=error):
+            with self.assertRaisesRegex(cli.ApiError, "Rivian returned HTTP 400"):
+                RivianReadClient()._post("Test", "query Test { test }")
+
+    def test_graphql_http_400_body_read_failure_is_sanitized_and_closed(self):
+        response_body = io.BytesIO(b"")
+        error = HTTPError(
+            "https://rivian.com/api/gql/gateway/graphql",
+            400,
+            "Bad Request",
+            Message(),
+            response_body,
+        )
+
+        with mock.patch("omarivian.api._NO_REDIRECT_OPENER.open", side_effect=error), mock.patch(
+            "omarivian.api._read_capped", side_effect=TimeoutError("private transport detail")
+        ):
+            with self.assertRaisesRegex(cli.ApiError, "Could not reach Rivian") as raised:
+                RivianReadClient()._post("Test", "query Test { test }")
+
+        self.assertNotIn("private transport detail", str(raised.exception))
+        self.assertTrue(response_body.closed)
+
     def test_refresh_session_rotates_access_refresh_and_user_session_tokens(self):
         client = RivianReadClient(
             Tokens(
@@ -46,7 +199,7 @@ class TokenRefreshTests(unittest.TestCase):
         self.assertFalse(calls[1][3])
         self.assertEqual(client.tokens.access_token, "new-access")
         self.assertEqual(client.tokens.refresh_token, "new-refresh")
-        self.assertEqual(client.tokens.user_session_token, "new-access")
+        self.assertEqual(client.tokens.user_session_token, "old-user-session")
         self.assertEqual(client.tokens.app_session_token, "new-app-session")
         self.assertEqual(client.tokens.csrf_token, "new-csrf")
 

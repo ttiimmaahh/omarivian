@@ -4,6 +4,7 @@ import struct
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from omarivian.parallax import ParallaxAuthenticationError, ParallaxError, _WebSocket, _header_value, _open_socket, decode_topic, snapshot
 
@@ -323,6 +324,21 @@ class ParallaxTests(unittest.TestCase):
         # as ParallaxError so api.parallax_state and cli.command_refresh catch it.
         with self.assertRaises(ParallaxError):
             _open_socket({"A-Sess": "sess-\u00e9"}, 5.0)
+
+    def test_invalid_handshake_closes_wrapped_tls_stream(self):
+        raw = mock.MagicMock()
+        stream = mock.MagicMock()
+        stream.recv.return_value = b"HTTP/1.1 403 Forbidden\r\n\r\n"
+        context = mock.MagicMock()
+        context.wrap_socket.return_value = stream
+
+        with mock.patch("omarivian.parallax.socket.create_connection", return_value=raw), mock.patch(
+            "omarivian.parallax.ssl.create_default_context", return_value=context
+        ):
+            with self.assertRaises(ParallaxAuthenticationError):
+                _open_socket({}, 5.0)
+
+        stream.close.assert_called_once_with()
 
     def test_websocket_rejects_masked_server_frames(self):
         stream_for_test: Any = ByteStream(server_frame(0x1, b"bad", masked=True))

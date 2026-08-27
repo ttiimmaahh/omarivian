@@ -15,6 +15,7 @@ MAX_LOCAL_JSON_BYTES = 1024 * 1024
 MAX_KEYRING_BYTES = 64 * 1024
 KEYRING_TIMEOUT_SECONDS = 30.0
 COMMAND_LOCK_TIMEOUT_SECONDS = 30.0
+MAX_ARTWORK_FILES_PER_VEHICLE = 32
 
 
 def _ensure_private_directory(path: Path) -> None:
@@ -195,6 +196,12 @@ def write_artwork(vehicle_id: str, source_url: str, body: bytes, extension: str)
     directory = CACHE_DIR / hashlib.sha256(vehicle_id.encode()).hexdigest()[:16]
     for private_directory in (CACHE_DIR.parent, CACHE_DIR, directory):
         _ensure_private_directory(private_directory)
+    siblings = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if len(siblings) >= MAX_ARTWORK_FILES_PER_VEHICLE:
+                raise OSError("Artwork cache contains too many files")
+            siblings.append(Path(entry.path))
     source_key = hashlib.sha256(source_url.encode()).hexdigest()
     path = directory / f"{source_key}{extension}"
     fd, temp_name = tempfile.mkstemp(prefix=".artwork.", dir=directory)
@@ -206,7 +213,7 @@ def write_artwork(vehicle_id: str, source_url: str, body: bytes, extension: str)
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
-    for sibling in directory.iterdir():
+    for sibling in siblings:
         if sibling == path:
             continue
         try:

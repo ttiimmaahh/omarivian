@@ -355,6 +355,7 @@ def _open_socket(headers: dict[str, str], timeout: float) -> _WebSocket:
     lines.extend(f"{name}: {_header_value(value)}" for name, value in headers.items() if value)
     request = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
     raw = socket.create_connection((HOST, 443), timeout=remaining())
+    stream: socket.socket | None = None
     try:
         raw.settimeout(remaining())
         stream = ssl.create_default_context().wrap_socket(raw, server_hostname=HOST)
@@ -401,7 +402,10 @@ def _open_socket(headers: dict[str, str], timeout: float) -> _WebSocket:
             raise ParallaxError("Invalid Rivian Parallax subprotocol")
         return _WebSocket(stream, buffered)
     except Exception:
-        raw.close()
+        if stream is not None:
+            stream.close()
+        else:
+            raw.close()
         raise
 
 

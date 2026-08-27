@@ -67,6 +67,20 @@ class PostmanTests(unittest.TestCase):
         self.assertEqual(mutations, AUTH_MUTATIONS)
         self.assertEqual(non_auth_mutations, set())
 
+    def test_refresh_rotates_access_and_refresh_but_preserves_user_session(self):
+        collection = json.loads(COLLECTION.read_text())
+        refresh = next(
+            item for item in _requests(collection["item"])
+            if json.loads(item["request"]["body"]["raw"])["operationName"]
+            == "RefreshAccessToken"
+        )
+        script = "\n".join(refresh["event"][0]["script"]["exec"])
+
+        self.assertIn('pm.environment.set("accessToken"', script)
+        self.assertIn('pm.environment.set("refreshToken"', script)
+        self.assertNotIn('pm.environment.set("userSessionToken"', script)
+        self.assertNotIn('pm.environment.unset("userSessionToken"', script)
+
     def test_example_environment_contains_no_secrets_or_gateway_override(self):
         environment = json.loads(ENVIRONMENT.read_text())
         values = {item["key"]: item["value"] for item in environment["values"]}

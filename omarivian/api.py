@@ -128,6 +128,7 @@ class RivianReadClient:
             headers["U-Sess"] = self.tokens.user_session_token
             headers["Authorization"] = f"Bearer {self.tokens.access_token}"
         payload = json.dumps({"operationName": operation, "query": query, "variables": variables}).encode()
+        http_error_code: int | None = None
         try:
             # GATEWAY is fixed in production, redirects are rejected, and the final
             # response origin is checked before any authenticated body is read.
@@ -143,36 +144,72 @@ class RivianReadClient:
                 )
         except HTTPError as exc:
             code = exc.code
-            exc.close()
-            if code in (401, 403): raise AuthenticationError("Rivian sign-in expired") from exc
-            raise ApiError(f"Rivian returned HTTP {code}") from exc
+            if code in (401, 403):
+                exc.close()
+                raise AuthenticationError("Rivian sign-in expired") from exc
+            if code != 400:
+                exc.close()
+                raise ApiError(f"Rivian returned HTTP {code}") from exc
+            # Rivian returns expired-session GraphQL errors with HTTP 400. Read
+            # this body under the same limits as a successful response so the
+            # caller can renew the session instead of requiring another link.
+            try:
+                raw = _read_capped(
+                    exc,
+                    MAX_GRAPHQL_RESPONSE_BYTES,
+                    "Rivian response",
+                    timeout=float(self.timeout),
+                )
+            except (URLError, TimeoutError, OSError) as read_exc:
+                raise ApiError("Could not reach Rivian") from read_exc
+            finally:
+                exc.close()
+            http_error_code = code
         except (URLError, TimeoutError, OSError) as exc:
             raise ApiError("Could not reach Rivian") from exc
         try:
             body = json.loads(raw)
         except (TypeError, ValueError) as exc:
+            if http_error_code is not None:
+                raise ApiError(f"Rivian returned HTTP {http_error_code}") from exc
             raise SchemaError("Rivian response was not valid JSON") from exc
         if not isinstance(body, dict):
+            if http_error_code is not None:
+                raise ApiError(f"Rivian returned HTTP {http_error_code}")
             raise SchemaError("Rivian response was not a JSON object")
         errors = body.get("errors", [])
         if errors is None:
             errors = []
         if not isinstance(errors, list):
+            if http_error_code is not None:
+                raise ApiError(f"Rivian returned HTTP {http_error_code}")
             raise SchemaError("Rivian response contained malformed errors")
         if errors:
-            first = errors[0]
-            if not isinstance(first, dict):
-                raise SchemaError("Rivian response contained malformed errors")
-            extensions = first.get("extensions")
-            if extensions is None:
-                extensions = {}
-            if not isinstance(extensions, dict):
-                raise SchemaError("Rivian response contained malformed errors")
-            code = str(extensions.get("code") or "")
-            reason = str(extensions.get("reason") or "")
-            if code == "UNAUTHENTICATED": raise AuthenticationError("Rivian sign-in expired")
-            message = str(first.get("message") or reason or code or "Rivian API error")
-            raise ApiError(message[:1024])
+            authenticated_error = any(
+                isinstance(error, dict)
+                and isinstance(error.get("extensions"), dict)
+                and str(error["extensions"].get("code") or "") == "UNAUTHENTICATED"
+                for error in errors
+            )
+            if authenticated_error:
+                raise AuthenticationError("Rivian sign-in expired")
+            for error in errors:
+                if not isinstance(error, dict):
+                    if http_error_code is not None:
+                        raise ApiError(f"Rivian returned HTTP {http_error_code}")
+                    raise SchemaError("Rivian response contained malformed errors")
+                extensions = error.get("extensions")
+                if extensions is not None and not isinstance(extensions, dict):
+                    if http_error_code is not None:
+                        raise ApiError(f"Rivian returned HTTP {http_error_code}")
+                    raise SchemaError("Rivian response contained malformed errors")
+            if http_error_code is not None:
+                raise ApiError(f"Rivian returned HTTP {http_error_code}")
+            # Upstream messages can contain account or request context. Keep
+            # them out of state.json and the QML error surface.
+            raise ApiError("Rivian API error")
+        if http_error_code is not None:
+            raise ApiError(f"Rivian returned HTTP {http_error_code}")
         data = body.get("data")
         if not isinstance(data, dict): raise SchemaError("Rivian response did not contain data")
         return data
@@ -224,9 +261,9 @@ class RivianReadClient:
             raise AuthenticationError("Rivian sign-in could not be renewed; relink the account")
         self.tokens.access_token = access_token
         self.tokens.refresh_token = rotated_refresh_token
-        # Rivian's refreshed access token becomes the U-Sess credential too;
-        # unlike login, this mutation does not return a separate userSessionToken.
-        self.tokens.user_session_token = access_token
+        # RefreshAccessToken does not return a userSessionToken. Preserve the
+        # distinct U-Sess established by login; replacing it with accessToken
+        # makes GraphQL requests work but causes Parallax to close with 4403.
 
     def vehicles(self) -> list[dict[str, Any]]:
         query = "query getUserInfo { currentUser { vehicles { id vin name vehicle { modelYear model } } } }"

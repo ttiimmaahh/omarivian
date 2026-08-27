@@ -148,9 +148,37 @@ function vehicleSubtitle(v) {
   if (!v) return "";
   return join([v.modelYear === null ? "" : String(Math.round(v.modelYear)), v.model], " ");
 }
+// The activity row below carries what the vehicle is doing, so this line stays
+// about the cloud connection alone and the two can never disagree or repeat.
 function connectionLabel(v) {
   if (!v) return "—";
-  return join([v.online ? "Online" : "Offline", titleCase(v.powerState)], " · ");
+  return flag(v.online) ? "Online" : "Offline";
+}
+
+// The panel's prominent activity line. Rivian reports powerState "unknown" on
+// R2 while the charger says exactly what the vehicle is doing, so the strongest
+// signal wins and "Unknown" never reaches the panel. `tone` is a semantic name
+// the panel maps to a color; `pulse` marks the one live, changing state worth
+// animating. An empty label means nothing is worth putting in the prominent
+// row — the connection line already carries Online/Offline on its own.
+function vehicleActivity(v) {
+  var none = { key: "unknown", label: "", tone: "neutral", pulse: false };
+  if (!isObject(v)) return none;
+  var power = text(v.powerState).trim().toLowerCase();
+  var c = isObject(v.charging) ? v.charging : {};
+  // Driving outranks the charger: the helper clears charge state while the
+  // vehicle moves, so a charging flag that survives into "go" is stale.
+  if (power === "driving" || power === "go")
+    return { key: "driving", label: "Driving", tone: "driving", pulse: false };
+  if (flag(c.charging))
+    return { key: "charging", label: "Charging", tone: "charging", pulse: true };
+  if (power === "sleeping" || power === "sleep")
+    return { key: "sleeping", label: "Sleeping", tone: "idle", pulse: false };
+  if (power && power !== "unknown")
+    return { key: power, label: titleCase(power), tone: power === "standby" ? "idle" : "neutral", pulse: false };
+  if (flag(c.pluggedIn))
+    return { key: "plugged-in", label: "Plugged in", tone: "neutral", pulse: false };
+  return none;
 }
 
 function formatPercent(n) { return num(n) === null ? "—" : Math.round(n) + "%"; }
@@ -220,14 +248,28 @@ function cachedStatusLabel(kind, state, vehicle, helperError, nowMs) {
   return "Cached status" + (age === "—" ? "" : " · Last connected " + age);
 }
 
-function chargingLabel(v) {
+// Rivian's remaining time counts down to the configured charge limit, not to a
+// full pack, so name that limit rather than imply the battery will fill.
+function chargeEtaLabel(v) {
+  if (!isObject(v) || !isObject(v.charging) || !flag(v.charging.charging)) return "";
+  var eta = formatMinutes(v.charging.minutesRemaining);
+  if (!eta) return "";
+  var limit = isObject(v.battery) ? num(v.battery.limitPercent) : null;
+  return limit === null ? eta + " left" : eta + " to " + formatPercent(limit);
+}
+
+// The activity row owns "Charging" and the time left, so this fact answers the
+// question it does not: is the vehicle connected to a charger? The reported
+// charger state is preferred while it says something, since "unknown" is not
+// worth a cell.
+function chargerLabel(v) {
   if (!v) return "—";
-  var c = v.charging, state = titleCase(c.state);
-  if (c.charging) {
-    var eta = formatMinutes(c.minutesRemaining);
-    return join([state || "Charging", eta ? eta + " left" : ""], " · ");
-  }
-  return state || (c.pluggedIn ? "Plugged in" : "Not plugged in");
+  var c = isObject(v.charging) ? v.charging : {};
+  if (flag(c.charging)) return "Plugged in";
+  var state = text(c.state).trim().toLowerCase();
+  if (flag(c.pluggedIn)) return titleCase(state) || "Plugged in";
+  if (state && state !== "unknown") return titleCase(state);
+  return "Not plugged in";
 }
 
 function securityLabel(v) {
@@ -275,7 +317,7 @@ function factRows(v, opts) {
   return [
     { label: "Security", value: securityLabel(v) },
     { label: "Cabin", value: climateLabel(v, flag(o.imperial)) },
-    { label: "Charging", value: chargingLabel(v) },
+    { label: "Charger", value: chargerLabel(v) },
     { label: "Location", value: locationLabel(v, flag(o.locationEnabled)) }
   ];
 }
@@ -291,10 +333,12 @@ function detailRows(v, opts) {
   ];
 }
 
+// Sits under the charge bar, beside the marker it describes: it names only the
+// limit that marker draws. The activity row carries the state and the time
+// left, and the charger fact carries the plug, so no line repeats another.
 function chargeCaption(v) {
-  if (!v) return "";
-  var limit = v.battery.limitPercent;
-  return join([limit === null ? "" : "Limit " + formatPercent(limit), chargingLabel(v)], " · ");
+  var limit = (isObject(v) && isObject(v.battery)) ? num(v.battery.limitPercent) : null;
+  return limit === null ? "" : "Limit " + formatPercent(limit);
 }
 
 function headerSubtitle(v) {
@@ -326,7 +370,7 @@ function tooltipText(state, settings, nowMs) {
 if (typeof module === "object" && module !== null && module.exports) {
   module.exports = {
     barLabel: barLabel, cachedStatusLabel: cachedStatusLabel, chargeCaption: chargeCaption,
-    chargingLabel: chargingLabel, climateLabel: climateLabel,
+    chargeEtaLabel: chargeEtaLabel, chargerLabel: chargerLabel, climateLabel: climateLabel,
     connectionLabel: connectionLabel, coordText: coordText, detailRows: detailRows, emptyState: emptyState,
     factRows: factRows, formatAge: formatAge, formatDistance: formatDistance, formatMinutes: formatMinutes,
     formatOdometer: formatOdometer, formatPercent: formatPercent, formatTemp: formatTemp, fraction: fraction,
@@ -335,6 +379,7 @@ if (typeof module === "object" && module !== null && module.exports) {
     plainText: plainText,
     refreshIntervalSec: refreshIntervalSec, roundCoord: roundCoord, securityLabel: securityLabel,
     selectVehicle: selectVehicle, statusBanner: statusBanner, statusKind: statusKind, titleCase: titleCase,
-    tooltipText: tooltipText, vehicleSubtitle: vehicleSubtitle, vehicleTitle: vehicleTitle
+    tooltipText: tooltipText, vehicleActivity: vehicleActivity, vehicleSubtitle: vehicleSubtitle,
+    vehicleTitle: vehicleTitle
   };
 }

@@ -105,6 +105,22 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(new_path.read_bytes(), b"new")
             self.assertEqual(list(new_path.parent.iterdir()), [new_path])
 
+    def test_artwork_cache_cleanup_is_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "vehicle-artwork"
+            vehicle_directory = cache_path / store.hashlib.sha256(b"vehicle-1").hexdigest()[:16]
+            vehicle_directory.mkdir(parents=True)
+            for index in range(store.MAX_ARTWORK_FILES_PER_VEHICLE + 1):
+                (vehicle_directory / f"stale-{index}.png").write_bytes(b"old")
+
+            with mock.patch.object(store, "CACHE_DIR", cache_path):
+                with self.assertRaisesRegex(OSError, "too many files"):
+                    store.write_artwork(
+                        "vehicle-1", "https://cdn.example/new.png", b"new", ".png"
+                    )
+
+            self.assertEqual(len(list(vehicle_directory.iterdir())), store.MAX_ARTWORK_FILES_PER_VEHICLE + 1)
+
     def test_cached_artwork_rejects_symlinked_file(self):
         with tempfile.TemporaryDirectory() as directory:
             cache_path = Path(directory) / "vehicle-artwork"

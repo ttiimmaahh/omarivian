@@ -54,6 +54,7 @@ Panel {
   readonly property var shownState: (panel.kind === "ok" && panel.stateData.vehicles.length > 0) ? panel.stateData : (panel.lastGood || panel.stateData)
   readonly property var vehicle: Model.selectVehicle(panel.shownState, panel.overrideVehicleId)
   readonly property bool hasData: !!panel.vehicle
+  readonly property var activity: Model.vehicleActivity(panel.vehicle)
   readonly property string artworkUrl: {
     if (!panel.hasData)
       return "";
@@ -67,6 +68,26 @@ Panel {
   readonly property color subtleSurface: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.08)
   readonly property color hairline: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.16)
 
+  // Activity tones. No theme color means "charging" or "driving", so those two
+  // hues are fixed, and each has a light-background and a dark-background
+  // variant so the activity line clears 4.5:1 against either. Weighted channels
+  // are enough to tell the two apart; this is a polarity test, not a measurement.
+  readonly property bool darkTheme: (Color.background.r * 0.2126 + Color.background.g * 0.7152 + Color.background.b * 0.0722) < 0.5
+  readonly property color chargingTone: panel.darkTheme ? "#4ade80" : "#15803d"
+  readonly property color drivingTone: panel.darkTheme ? "#60a5fa" : "#1d4ed8"
+  // Sleeping stays quiet, but sits above mutedForeground: a prominent line has
+  // to stay readable, and 60% foreground does not on most themes.
+  readonly property color idleTone: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.78)
+
+  function activityTone(tone) {
+    if (tone === "charging")
+      return panel.chargingTone;
+    if (tone === "driving")
+      return panel.drivingTone;
+    if (tone === "idle")
+      return panel.idleTone;
+    return Color.foreground;
+  }
   function refresh() {
     panel.runHelper(["refresh", panel.locationEnabled ? "--location" : "--no-location"]);
   }
@@ -468,11 +489,97 @@ Panel {
 
               Text {
                 width: headerText.width
-                text: panel.hasData ? [Model.vehicleSubtitle(panel.vehicle), Model.connectionLabel(panel.vehicle)].filter(p => p).join(" · ") : "Rivian vehicle status"
+                text: Model.headerSubtitle(panel.vehicle)
                 textFormat: Text.PlainText
                 font.pixelSize: Style.font.bodySmall
                 color: panel.mutedForeground
                 elide: Text.ElideRight
+              }
+
+              // What the vehicle is actually doing, in the theme-safe tone for
+              // that state. The word carries the meaning on its own; color and
+              // the dot only reinforce it, so the line survives a color-blind
+              // reading and a monochrome theme.
+              Item {
+                id: activityRow
+
+                width: headerText.width
+                visible: panel.hasData && activityLabel.text !== ""
+                implicitHeight: activityLabel.implicitHeight
+
+                Rectangle {
+                  id: activityDot
+
+                  width: Style.space(6)
+                  height: width
+                  radius: width / 2
+                  anchors.left: parent.left
+                  anchors.verticalCenter: activityLabel.verticalCenter
+                  color: panel.activityTone(panel.activity.tone)
+
+                  // Charging is the one state that keeps changing while you
+                  // look at it. A 1.8 s cycle is far below any flash threshold,
+                  // and it only runs while the popup is actually on screen.
+                  SequentialAnimation on opacity {
+                    id: activityPulse
+
+                    running: panel.activity.pulse && panel.opened
+                    loops: Animation.Infinite
+
+                    NumberAnimation {
+                      from: 1
+                      to: 0.3
+                      duration: 900
+                      easing.type: Easing.InOutQuad
+                    }
+
+                    NumberAnimation {
+                      from: 0.3
+                      to: 1
+                      duration: 900
+                      easing.type: Easing.InOutQuad
+                    }
+
+                    // A stopped value source holds its last frame, so hand the
+                    // dot back at full strength when the pulse ends.
+                    onRunningChanged: {
+                      if (!activityPulse.running)
+                        activityDot.opacity = 1;
+                    }
+                  }
+                }
+
+                Text {
+                  id: activityLabel
+
+                  anchors.left: activityDot.right
+                  anchors.leftMargin: Style.space(6)
+                  anchors.top: parent.top
+                  text: panel.hasData ? panel.activity.label : ""
+                  textFormat: Text.PlainText
+                  font.pixelSize: Style.font.body
+                  font.weight: Font.Medium
+                  color: panel.activityTone(panel.activity.tone)
+                }
+
+                // Time to the configured charge limit, and only while charging.
+                // This is the single place the estimate appears.
+                Text {
+                  id: activityEta
+
+                  readonly property string eta: panel.hasData ? Model.chargeEtaLabel(panel.vehicle) : ""
+
+                  anchors.left: activityLabel.right
+                  anchors.leftMargin: Style.space(6)
+                  anchors.right: parent.right
+                  anchors.baseline: activityLabel.baseline
+                  visible: activityEta.eta !== ""
+                  text: activityEta.eta === "" ? "" : "· " + activityEta.eta
+                  textFormat: Text.PlainText
+                  font.pixelSize: Style.font.bodySmall
+                  color: panel.mutedForeground
+                  elide: Text.ElideRight
+                }
               }
 
               Text {
@@ -679,14 +786,12 @@ Panel {
               }
             }
 
+            // Names the limit the marker above draws, and nothing else: the
+            // activity row already says charging and how long is left.
             Text {
               width: parent.width
-              text: {
-                if (!panel.hasData)
-                  return "";
-                const limit = panel.vehicle.battery.limitPercent;
-                return [limit === null ? "" : "Limit " + Model.formatPercent(limit), Model.chargingLabel(panel.vehicle)].filter(p => p).join(" · ");
-              }
+              visible: text !== ""
+              text: Model.chargeCaption(panel.vehicle)
               textFormat: Text.PlainText
               font.pixelSize: Style.font.bodySmall
               color: panel.mutedForeground
