@@ -28,6 +28,43 @@ from .store import (
 
 MAX_TEXT_CHARS = 256
 
+# Rivian reports the charger as an enum, not as prose. "charging_ready" means
+# the vehicle is ready to charge and is not connected, so testing for the
+# substring "charging" reports a parked, unplugged car as actively charging.
+# Map the enum instead and leave anything unrecognized undecided rather than
+# guessing a plug that may not be there.
+CHARGER_STATES: dict[str, tuple[bool, bool | None]] = {
+    # chargerState
+    "charging_active": (True, True),
+    "charging_connecting": (False, True),
+    "charging_complete": (False, True),
+    "charging_schedule_request": (False, True),
+    "charging_interrupted": (False, True),
+    "charging_error": (False, None),
+    "charging_ready": (False, False),
+    "not_charging": (False, False),
+    # chargerStatus, still reported by older vehicles
+    "chrgr_sts_connected_charging": (True, True),
+    "chrgr_sts_connected_no_chrg": (False, True),
+    "chrgr_sts_not_connected": (False, False),
+}
+
+
+def _charger(state: dict[str, Any]) -> tuple[str, bool, bool | None]:
+    """Return the reported charger state plus what it says about charging."""
+    reported = "unknown"
+    for key in ("chargerState", "chargerStatus"):
+        value = _record(state.get(key))
+        if value is None:
+            continue
+        value = _text(value)
+        if reported == "unknown":
+            reported = value
+        mapped = CHARGER_STATES.get(value.strip().lower())
+        if mapped is not None:
+            return value, mapped[0], mapped[1]
+    return reported, False, None
+
 
 class NoLinkedAccount(AuthenticationError):
     """Raised when the user has not linked an account yet."""
@@ -141,11 +178,10 @@ def normalize_vehicle(summary: dict[str, Any], state: dict[str, Any], include_lo
     raw_power_state = _text(_record(state.get("powerState")) or "unknown")
     driving = raw_power_state.strip().lower() == "go"
     power_state = "driving" if driving else raw_power_state
-    charger = _text(_record(state.get("chargerState")) or _record(state.get("chargerStatus")) or "unknown")
-    lower_charger = charger.lower()
-    charging = "charging" in lower_charger and not any(word in lower_charger for word in ("not", "done", "complete"))
-    plugged = charging or any(word in lower_charger for word in ("connected", "plugged", "ready", "complete"))
-    minutes_remaining = _number(_record(state.get("timeToEndOfCharge")))
+    charger, charging, plugged = _charger(state)
+    # The remaining time is left over from the last session once charging ends,
+    # so a stale "0 min" must not read as an estimate for right now.
+    minutes_remaining = _number(_record(state.get("timeToEndOfCharge"))) if charging else None
     if driving:
         charger = "not_charging"
         charging = False

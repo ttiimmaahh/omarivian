@@ -175,6 +175,16 @@ Remove only the local symlink, or replace it with a clean clone pinned to the la
 
 Switching modes preserves Secret Service credentials and cached state. Use the panel's **Unlink** action separately only when intentionally testing clean account onboarding.
 
+To compare what Rivian actually returns against what the panel decides, dump the raw responses for the linked account:
+
+```sh
+./tools/dump-sample-data
+# Include coordinates in the dump:
+./tools/dump-sample-data --location
+```
+
+This writes `vehicles.json`, `vehicle-state.json`, `parallax-state.json`, and the derived `normalized-vehicle.json` to `sample-data/`. The dump is unredacted account data—VIN, vehicle identifiers, and optionally coordinates—so the directory is git-ignored and written with owner-only permissions. Nothing in the shipped plugin reads it.
+
 ## Credits
 
 The API behavior was independently implemented using public, unofficial community references including [`rivian-python-client`](https://github.com/bretterer/rivian-python-client) (MIT) and [Riviamigo](https://github.com/bballdavis/Riviamigo) (GPL-3.0) as documentation. No source from Riviamigo is included in this repository.

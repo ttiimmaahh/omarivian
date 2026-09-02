@@ -87,13 +87,40 @@ assert.equal(
 assert.equal(M.chargeEtaLabel(null), "");
 
 assert.equal(M.chargerLabel(null), "—");
-assert.equal(M.chargerLabel({ charging: { charging: false, pluggedIn: true, state: "charging_complete" } }), "Charging Complete");
+assert.equal(M.chargerLabel({ charging: { charging: false, pluggedIn: true, state: "charging_complete" } }), "Charge complete");
+// "charging_ready" is the idle, unconnected state. Title-casing the token used
+// to claim a plug the vehicle never reported.
+assert.equal(
+  M.chargerLabel({ charging: { charging: false, pluggedIn: false, state: "charging_ready" } }),
+  "Not plugged in",
+  "a ready-to-charge vehicle is not plugged in"
+);
+assert.equal(
+  M.chargerLabel({ charging: { charging: false, pluggedIn: true, state: "charging_schedule_request" } }),
+  "Plugged in · scheduled"
+);
 assert.equal(
   M.chargerLabel({ charging: { charging: false, pluggedIn: false, state: "unknown" } }),
   "Not plugged in",
   "an unreported charger must not surface as Unknown"
 );
+// An enum this build does not know still must not reach the panel as a token
+// when the helper decided the plug for us.
+assert.equal(
+  M.chargerLabel({ charging: { charging: false, pluggedIn: true, state: "charging_moon_beam" } }),
+  "Charging Moon Beam"
+);
 assert.equal(M.chargerLabel({ charging: {} }), "Not plugged in");
+
+// The panel must not promote a sleeping, unplugged vehicle to "Charging".
+assert.equal(
+  M.vehicleActivity({
+    online: false,
+    powerState: "sleeping",
+    charging: { state: "charging_ready", charging: false, pluggedIn: false }
+  }).label,
+  "Sleeping"
+);
 
 assert.equal(M.chargeCaption({ battery: { limitPercent: 80 }, charging: {} }), "Limit 80%");
 assert.equal(

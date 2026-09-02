@@ -258,15 +258,33 @@ function chargeEtaLabel(v) {
   return limit === null ? eta + " left" : eta + " to " + formatPercent(limit);
 }
 
+// Rivian's charger values are enum tokens, not display text: title-casing
+// "charging_ready" would put "Charging Ready" in the cell that answers whether
+// the cable is connected, when that state means the opposite.
+var CHARGER_LABELS = {
+  charging_active: "Plugged in",
+  charging_connecting: "Connecting",
+  charging_complete: "Charge complete",
+  charging_schedule_request: "Plugged in · scheduled",
+  charging_interrupted: "Charge interrupted",
+  charging_error: "Charger error",
+  charging_ready: "Not plugged in",
+  not_charging: "Not plugged in",
+  chrgr_sts_connected_charging: "Plugged in",
+  chrgr_sts_connected_no_chrg: "Plugged in",
+  chrgr_sts_not_connected: "Not plugged in"
+};
+
 // The activity row owns "Charging" and the time left, so this fact answers the
-// question it does not: is the vehicle connected to a charger? The reported
-// charger state is preferred while it says something, since "unknown" is not
-// worth a cell.
+// question it does not: is the vehicle connected to a charger? A known enum
+// wins, since it is the most specific honest answer; anything unrecognized
+// falls back to the plug flag rather than showing a raw token.
 function chargerLabel(v) {
   if (!v) return "—";
   var c = isObject(v.charging) ? v.charging : {};
   if (flag(c.charging)) return "Plugged in";
   var state = text(c.state).trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(CHARGER_LABELS, state)) return CHARGER_LABELS[state];
   if (flag(c.pluggedIn)) return titleCase(state) || "Plugged in";
   if (state && state !== "unknown") return titleCase(state);
   return "Not plugged in";

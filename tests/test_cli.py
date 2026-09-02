@@ -35,7 +35,7 @@ class CliTests(unittest.TestCase):
                 "closureFrunkLocked": record("locked"),
                 "closureLiftgateLocked": record("locked"),
                 "closureFrunkClosed": record("open"),
-                "chargerState": record("charging"),
+                "chargerState": record("charging_active"),
                 "cabinClimateInteriorTemperature": record(21.5),
                 "gnssLocation": {"latitude": 30.2672, "longitude": -97.7431, "timeStamp": "2026-08-25T12:01:00Z", "isAuthorized": True},
                 "cloudConnection": {"isOnline": True, "lastSync": "2026-08-25T12:02:00Z"},
@@ -281,6 +281,64 @@ class CliTests(unittest.TestCase):
         self.assertFalse(vehicle["charging"]["charging"])
         self.assertFalse(vehicle["charging"]["pluggedIn"])
         self.assertIsNone(vehicle["charging"]["minutesRemaining"])
+
+    def test_charging_ready_is_not_reported_as_charging(self):
+        # "charging_ready" means the vehicle is ready to charge and is not
+        # connected. Substring matching used to read the "charging" prefix as
+        # an active session and show a parked car as plugged in and charging.
+        vehicle = normalize_vehicle(
+            {"id": "vehicle-1"},
+            {
+                "powerState": record("sleeping", "2026-09-02T19:50:09Z"),
+                "chargerState": record("charging_ready", "2026-09-01T19:54:28Z"),
+                "timeToEndOfCharge": record(0, "2026-09-01T19:55:35Z"),
+            },
+            False,
+        )
+
+        self.assertEqual(vehicle["charging"]["state"], "charging_ready")
+        self.assertFalse(vehicle["charging"]["charging"])
+        self.assertFalse(vehicle["charging"]["pluggedIn"])
+        self.assertIsNone(vehicle["charging"]["minutesRemaining"])
+
+    def test_charger_states_map_to_charging_and_plug(self):
+        expected = {
+            "charging_active": (True, True),
+            "charging_connecting": (False, True),
+            "charging_complete": (False, True),
+            "charging_schedule_request": (False, True),
+            "charging_interrupted": (False, True),
+            "charging_error": (False, None),
+            "charging_ready": (False, False),
+            "chrgr_sts_connected_charging": (True, True),
+            "chrgr_sts_connected_no_chrg": (False, True),
+            "chrgr_sts_not_connected": (False, False),
+        }
+        for state, (charging, plugged) in expected.items():
+            with self.subTest(state=state):
+                vehicle = normalize_vehicle({"id": "vehicle-1"}, {"chargerState": record(state)}, False)
+                self.assertEqual(vehicle["charging"]["state"], state)
+                self.assertEqual(vehicle["charging"]["charging"], charging)
+                self.assertEqual(vehicle["charging"]["pluggedIn"], plugged)
+
+    def test_unrecognized_charger_state_leaves_the_plug_undecided(self):
+        # A future enum value must not be guessed into a plug that may not be
+        # there; the reported token still reaches the panel.
+        vehicle = normalize_vehicle({"id": "vehicle-1"}, {"chargerState": record("charging_moon_beam")}, False)
+
+        self.assertEqual(vehicle["charging"]["state"], "charging_moon_beam")
+        self.assertFalse(vehicle["charging"]["charging"])
+        self.assertIsNone(vehicle["charging"]["pluggedIn"])
+
+    def test_charger_status_answers_when_charger_state_is_absent(self):
+        vehicle = normalize_vehicle(
+            {"id": "vehicle-1"},
+            {"chargerStatus": record("chrgr_sts_connected_no_chrg"), "timeToEndOfCharge": record(0)},
+            False,
+        )
+
+        self.assertFalse(vehicle["charging"]["charging"])
+        self.assertTrue(vehicle["charging"]["pluggedIn"])
 
     def test_normalize_vehicle_includes_r2_climate_target(self):
         vehicle = normalize_vehicle(

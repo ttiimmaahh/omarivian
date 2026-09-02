@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Save raw Rivian API responses to sample-data/ for local debugging.
+
+The output is unredacted account data (VIN, coordinates, vehicle identifiers),
+so sample-data/ is git-ignored and written with private permissions. Nothing in
+the shipped plugin reads these files; they exist to compare what the API
+returns against what normalize_vehicle() decides.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from omarivian.api import ApiError, RivianReadClient, Tokens  # noqa: E402
+from omarivian.cli import normalize_vehicle  # noqa: E402
+from omarivian.parallax import ALLOWED_TOPICS  # noqa: E402
+from omarivian.store import load_tokens, read_preferences  # noqa: E402
+
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "sample-data"
+
+
+def _write(name: str, payload: object) -> Path:
+    path = OUTPUT_DIR / name
+    text = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text + "\n")
+    print(f"wrote {path.relative_to(Path.cwd())} ({len(text)} bytes)")
+    return path
+
+
+def main() -> int:
+    raw = load_tokens()
+    if not raw:
+        print("No Rivian account is linked; run ./tools/omarivian link first.", file=sys.stderr)
+        return 2
+    client = RivianReadClient(Tokens.from_json(raw))
+
+    OUTPUT_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(OUTPUT_DIR, 0o700)
+
+    include_location = "--location" in sys.argv[1:]
+    captured_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    try:
+        vehicles = client.vehicles()
+    except ApiError as exc:
+        print(f"vehicles query failed: {exc}", file=sys.stderr)
+        return 1
+    _write("vehicles.json", {"capturedAt": captured_at, "response": vehicles})
+
+    prefs = read_preferences()
+    selected = str(prefs.get("selectedVehicleId") or "")
+    if not any(str(v.get("id")) == selected for v in vehicles):
+        selected = str(vehicles[0].get("id") or "") if vehicles else ""
+    if not selected:
+        print("No vehicle to query.", file=sys.stderr)
+        return 1
+
+    # vehicle_state() merges Parallax fallbacks into the legacy shape, so this is
+    # exactly the dict normalize_vehicle() consumes.
+    try:
+        state = client.vehicle_state(selected, include_location)
+    except ApiError as exc:
+        print(f"vehicleState query failed: {exc}", file=sys.stderr)
+        return 1
+    _write("vehicle-state.json", {"capturedAt": captured_at, "vehicleId": selected, "response": state})
+
+    # Every allowlisted Parallax topic, whether or not the legacy query needed it.
+    parallax = client.parallax_state(selected, set(ALLOWED_TOPICS))
+    _write("parallax-state.json", {"capturedAt": captured_at, "vehicleId": selected, "response": parallax})
+
+    summary = next((v for v in vehicles if str(v.get("id")) == selected), {})
+    _write(
+        "normalized-vehicle.json",
+        {
+            "capturedAt": captured_at,
+            "note": "What normalize_vehicle() derives from vehicle-state.json.",
+            "result": normalize_vehicle(summary, state, include_location),
+        },
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
