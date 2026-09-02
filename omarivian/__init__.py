@@ -1,3 +1,3 @@
 """OmaRivian read-only Rivian status helper."""
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"

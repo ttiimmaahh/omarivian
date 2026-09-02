@@ -1,6 +1,6 @@
 [project]
 name = "omarivian"
-version = "0.4.1"
+version = "0.4.2"
 description = "Read-only Rivian vehicle status for the Omarchy bar"
 requires-python = ">=3.10"
 license = "MIT"
