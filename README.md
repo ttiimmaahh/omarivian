@@ -113,7 +113,11 @@ The QML panel invokes a narrow local helper. That helper contains only:
 - A bounded, read-only `ParallaxMessages` snapshot for missing R2 lock, closure, power-state, cabin-climate, and opt-in location fields
 - `getVehicleImages` to discover Rivian's configured, display-only vehicle render
 
-There is no generic query CLI and no vehicle command implementation. Session tokens are stored under the `omarivian` application label through Secret Service. When Rivian rejects an expired session, the next scheduled or manual refresh exchanges the stored refresh token, saves the rotated credentials immediately, and retries once; a separate background daemon is not required. Authenticated HTTP requests reject redirects and cross-origin responses, and network, keyring, state, and preference reads have strict byte limits.
+There is no generic query CLI and no vehicle command implementation. Session tokens are stored under the `omarivian` application label through Secret Service. Each scheduled or manual refresh checks the access token's expiry before requesting data and renews it if expired or within five minutes of expiry. This avoids relying on Rivian's error labels: expired tokens can produce a generic `INTERNAL_SERVER_ERROR` rather than an authentication error. Decoded expiry is only a scheduling hint, not authentication proof, and is never written to the status cache.
+
+Explicit authentication failures still trigger renewal and one retry, including for opaque tokens without readable expiry. Each poll performs at most one renewal and saves rotated credentials immediately, before further API work. Polling continues while the panel is closed; after downtime, the next poll renews an expired access token. No separate daemon or saved password is required. A revoked or expired refresh token still requires **Link account**; temporary network/keyring failures can recover on later polls. Last-known data and local artwork remain available, marked stale, including after a shell restart.
+
+Authenticated HTTP requests reject redirects and cross-origin responses, and network, keyring, state, and preference reads have strict byte limits.
 
 The sanitized state cache is mode `0600` and contains vehicle status plus identity summaries; full VINs are never written. Vehicle artwork is downloaded only from Rivian-controlled HTTPS hosts into `~/.cache/omarivian/vehicle-artwork`, using mode `0700` directories and mode `0600` image files. QML loads the local file and never contacts Rivian directly. Unlinking removes that artwork cache.
 

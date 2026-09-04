@@ -316,20 +316,27 @@ def command_refresh(args: argparse.Namespace) -> int:
         client = _load_client()
         refreshed_session = False
 
-        def authenticated_request(call):
+        def renew_session():
             nonlocal refreshed_session
+            client.refresh_session()
+            # Refresh tokens rotate. Persist the replacement before any later
+            # API work can fail, or the next poll may reuse an invalidated token.
+            save_tokens(client.tokens.to_json())
+            refreshed_session = True
+
+        def authenticated_request(call):
             try:
                 return call()
             except AuthenticationError:
                 if refreshed_session:
                     raise
-                client.refresh_session()
-                # Refresh tokens rotate. Persist the replacement before any later
-                # API work can fail, or the next poll may reuse an invalidated token.
-                save_tokens(client.tokens.to_json())
-                refreshed_session = True
+                renew_session()
                 return call()
 
+        # Rivian can mislabel expired access tokens as INTERNAL_SERVER_ERROR.
+        # Renew before reads rather than relying solely on its error taxonomy.
+        if client.tokens.access_expires_soon():
+            renew_session()
         vehicles = authenticated_request(client.vehicles)
         selected = str(prefs.get("selectedVehicleId") or "")
         if not any(str(v.get("id")) == selected for v in vehicles):

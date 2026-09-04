@@ -5,7 +5,9 @@ public request method and no vehicle-control mutation in this package.
 """
 from __future__ import annotations
 
+import base64
 import json
+import math
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -98,6 +100,28 @@ class Tokens:
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
 
+    def access_expires_soon(self, *, now: float | None = None, leeway: float = 300) -> bool:
+        """Use JWT exp only as a scheduling hint, never as authentication proof.
+
+        Opaque/unknown token formats keep the reactive authentication retry.
+        No decoded claims or credentials are written to the status cache.
+        """
+        if len(self.access_token) > 16 * 1024:
+            return False
+        parts = self.access_token.split(".")
+        if len(parts) != 3:
+            return False
+        try:
+            payload = json.loads(base64.b64decode(
+                parts[1] + "=" * (-len(parts[1]) % 4), altchars=b"-_", validate=True
+            ))
+            expires = payload.get("exp") if isinstance(payload, dict) else None
+            if isinstance(expires, bool) or not isinstance(expires, (int, float)) or not math.isfinite(expires):
+                return False
+            return expires <= (time.time() if now is None else now) + leeway
+        except (ValueError, TypeError, OverflowError):
+            return False
+
     @classmethod
     def from_json(cls, raw: str) -> "Tokens":
         try:
@@ -122,8 +146,10 @@ class RivianReadClient:
             "Apollographql-Client-Name": CLIENT_NAME,
             "dc-cid": f"m-ios-{uuid.uuid4()}",
         }
-        if self.tokens.app_session_token: headers["A-Sess"] = self.tokens.app_session_token
-        if self.tokens.csrf_token: headers["Csrf-Token"] = self.tokens.csrf_token
+        # Bootstrap must not depend on the session it is replacing being valid.
+        if operation != "CreateCSRFToken":
+            if self.tokens.app_session_token: headers["A-Sess"] = self.tokens.app_session_token
+            if self.tokens.csrf_token: headers["Csrf-Token"] = self.tokens.csrf_token
         if authenticated:
             headers["U-Sess"] = self.tokens.user_session_token
             headers["Authorization"] = f"Bearer {self.tokens.access_token}"

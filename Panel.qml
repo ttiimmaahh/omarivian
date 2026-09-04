@@ -151,7 +151,10 @@ Panel {
       panel.lastGood = null;
       panel.artworkById = ({});
       panel.overrideVehicleId = "";
-    } else if (Model.statusKind(parsed) === "ok" && parsed.vehicles.length > 0) {
+    } else if (parsed.vehicles.length > 0 && (Model.statusKind(parsed) === "ok" || !panel.lastGood)) {
+      // Failed polls retain the last successful vehicles in state.json. Seed
+      // both data and artwork from that cache on cold start, but keep a warm
+      // lastGood intact. The current status still marks these values stale.
       panel.lastGood = parsed;
       panel.artworkById = panel.artworkFromText(body);
     }

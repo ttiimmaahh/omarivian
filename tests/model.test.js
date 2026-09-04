@@ -175,4 +175,42 @@ assert.ok(tip.includes("beacon.png"), "sanitising must not silently drop the res
 const broken = M.parseState("not json");
 assert.ok(!M.tooltipText(broken, {}, Date.now()).includes("<"));
 
-console.log("Model.js tests passed");
+// Execute the actual QML JavaScript handlers without requiring a running shell.
+const fs = require("node:fs");
+const vm = require("node:vm");
+const panelSource = fs.readFileSync(require.resolve("../Panel.qml"), "utf8");
+function panelCacheHarness() {
+  const panel = { lastGood: null, artworkById: {}, locationEnabled: false, overrideVehicleId: "" };
+  const context = vm.createContext({ panel, Model: M });
+  for (const name of ["artworkFromText", "applyText"]) {
+    const source = panelSource.match(new RegExp("^  function " + name + "\\([^]*?^  }", "m"));
+    assert.ok(source, "QML handler must exist: " + name);
+    vm.runInContext(source[0] + "; panel." + name + " = " + name + ";", context);
+  }
+  return panel;
+}
+for (const status of ["unavailable", "auth-expired", "schema-error"]) {
+  const panel = panelCacheHarness();
+  const cached = { status, selectedVehicleId: "one", vehicles: [
+    { id: "one", artwork: "file:///cache/render.png", battery: { percent: 64 } },
+    { id: "two", artwork: "https://rivian.com/remote.png" }
+  ] };
+  panel.applyText(JSON.stringify(cached));
+  assert.equal(panel.lastGood.vehicles[0].battery.percent, 64);
+  assert.equal(panel.artworkById.one, "file:///cache/render.png", "cold error cache must restore local artwork");
+  assert.equal(panel.artworkById.two, undefined, "remote artwork must never reach QML");
+  assert.notEqual(M.statusKind(panel.stateData), "ok", "cached errors must remain visibly stale");
+
+  panel.applyText(JSON.stringify({ ...cached, status: "linked" }));
+  const lastGood = panel.lastGood;
+  panel.applyText(JSON.stringify({ status, vehicles: [] }));
+  assert.equal(panel.lastGood, lastGood, "a failed poll must retain warm data");
+  assert.equal(panel.artworkById.one, "file:///cache/render.png");
+  panel.applyText("not json");
+  assert.equal(panel.lastGood, lastGood);
+  panel.applyText(JSON.stringify({ status: "unlinked", vehicles: [] }));
+  assert.equal(panel.lastGood, null);
+  assert.equal(Object.keys(panel.artworkById).length, 0, "unlink must discard cached identity");
+}
+
+console.log("Model.js and panel cache tests passed");
